@@ -1,0 +1,45 @@
+# Core dependencies -- everything the default setup needs (Chatterbox-Turbo +
+# Kokoro voices, faster-whisper STT, any OpenAI-compatible LLM).
+#
+# End users: don't install these by hand, just run VCB.bat -- it sets up a
+# private Python, the right PyTorch build for your GPU, and everything below.
+#
+# Manual install (developers):
+#   1. PyTorch first, matching your hardware:
+#        NVIDIA GPU: pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+#        CPU only:   pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+#   2. uv pip install -r requirements.txt -c requirements-lock.txt --override requirements-overrides.txt
+#      (chatterbox-tts pins an older torch/newer transformers than we use; the
+#      overrides file resolves that. Plain pip has no overrides: use
+#      `pip install --no-deps chatterbox-tts` after the rest instead.)
+#   Optional TTS engines (xtts / orpheus / csm): requirements-extras.txt
+
+# Audio I/O
+sounddevice>=0.4.6
+numpy<2
+
+# VAD (silero via torch.hub) -- torch/torchaudio installed separately (see above)
+torch
+torchaudio
+
+# STT
+faster-whisper>=1.0
+nvidia-cublas-cu12; sys_platform == 'win32'
+nvidia-cudnn-cu12; sys_platform == 'win32'
+
+# LLM client (any OpenAI-compatible server: Ollama, cloud APIs, llama.cpp)
+openai>=1.30
+
+# Long-term memory (CPU embeddings)
+fastembed
+
+# TTS
+chatterbox-tts       # voice cloning from your .wav + natural <laugh>/<sigh> tags
+kokoro>=0.9          # preset voices, light enough for CPU
+soundfile
+# Kokoro's English phonemizer downloads this at runtime otherwise:
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+# chatterbox pins transformers 5.x but works on 4.x:
+transformers<5
+# resemble-perth (chatterbox watermarker) still needs pkg_resources:
+setuptools<81

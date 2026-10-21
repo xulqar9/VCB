@@ -1,0 +1,35 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "VCB Avatar",
+	"Description": "Connects a MetaHuman to the VCB voice bot over a local TCP socket: streams audio, conversation state and emotion tags for lip sync and body animation.",
+	"Category": "VCB",
+	"CreatedBy": "",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "VcbAvatar",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "NV_ACE_Reference",
+			"Enabled": true
+		},
+		{
+			"Name": "NvAudio2FaceClaire",
+			"Enabled": true
+		}
+	]
+}
