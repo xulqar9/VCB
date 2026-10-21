@@ -283,10 +283,10 @@ class ManagedProcesses:
             raise TimeoutError(msg)
         log.warning(msg)
 
-    def start_transcript_window(self, transcript_path: Path) -> None:
+    def start_transcript_window(self, transcript_path: Path, assistant_name: str = "") -> None:
         if not self.cfg.server.transcript_window or sys.platform != "win32":
             return
-        cmd = [sys.executable, "-m", "vcb.transcript", str(transcript_path)]
+        cmd = [sys.executable, "-m", "vcb.transcript", str(transcript_path), assistant_name]
         self._window = subprocess.Popen(
             cmd, creationflags=CREATE_NEW_CONSOLE,
             cwd=str(Path(__file__).resolve().parent.parent),

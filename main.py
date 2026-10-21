@@ -38,7 +38,7 @@ import logging  # noqa: E402
 from vcb.config import AppConfig, available_prompts, build_action_instructions, load_system_prompt  # noqa: E402
 from vcb.hardware import adapt_to_hardware, cuda_available  # noqa: E402
 from vcb.llm import OpenAICompatLLM  # noqa: E402
-from vcb.orchestrator import Orchestrator  # noqa: E402
+from vcb.orchestrator import Orchestrator, speaker_name  # noqa: E402
 from vcb.runtime import ManagedProcesses, setup_logging  # noqa: E402
 from vcb.stt import FasterWhisperSTT  # noqa: E402
 from vcb.tts import ChatterboxTurboTTS, KokoroTTS, OrpheusTTS, SesameCSMTTS, XTTSv2TTS  # noqa: E402
@@ -160,7 +160,7 @@ def main() -> None:
     procs = ManagedProcesses(cfg)
     try:
         procs.start_server()                 # blocks until the backend is ready
-        procs.start_transcript_window(transcript)
+        procs.start_transcript_window(transcript, speaker_name(cfg.llm.system_prompt))
         asyncio.run(amain(cfg, tts_engine, transcript))
     except KeyboardInterrupt:
         print("\nbye")

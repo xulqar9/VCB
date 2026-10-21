@@ -95,7 +95,7 @@ def _is_instruction_echo(text: str) -> bool:
 _NAME_RE = re.compile(r"\s*You are ([A-Z][a-zA-Z]+)")
 
 
-def _speaker_name(system_prompt: str) -> str:
+def speaker_name(system_prompt: str) -> str:
     """Pull the persona's spoken name out of its prompt ("You are Iris, ...")."""
     m = _NAME_RE.match(system_prompt or "")
     return m.group(1) if m else "Assistant"
@@ -128,7 +128,7 @@ class Orchestrator:
         self._avatar_end_task: asyncio.Task | None = None
         self.vad = VADSegmenter(cfg.vad, cfg.audio)
         self.convo = ConversationManager(cfg.llm)
-        self._name = _speaker_name(cfg.llm.system_prompt)
+        self._name = speaker_name(cfg.llm.system_prompt)
         # Live chat transcript: words appear as they're heard (see transcript.py).
         self._transcript = Transcript(transcript_path, self._name)
         self._pacer = WordPacer(self._transcript)

@@ -77,6 +77,39 @@ def test_user_line_closes_an_open_assistant_line(tmp_path):
     assert _lines(path).splitlines()[-1].endswith("You:  hi")
 
 
+def test_renderer_wraps_on_words_with_hanging_indent():
+    import io
+    from vcb.transcript import _Renderer
+
+    out = io.StringIO()
+    r = _Renderer(out, lambda: 41, color=False)
+    # Arrives word by word, like the live transcript.
+    r.feed("14:02:12  Iris:  I")
+    for w in " can set you a reminder to check before you head out.".split(" ")[1:]:
+        r.feed(" " + w)
+    r.feed("\n14:02:19  You:  ok\n")
+    r.flush()
+    lines = out.getvalue().splitlines()
+    assert lines[0] == "14:02:12  Iris:  I can set you a"
+    assert lines[1] == "                 reminder to check"
+    assert lines[2] == "                 before you head out."
+    assert lines[3] == "14:02:19  You:   ok"           # padded to align with "Iris:"
+    assert all(len(line) <= 40 for line in lines)
+
+
+def test_renderer_holds_partial_word_until_complete():
+    import io
+    from vcb.transcript import _Renderer
+
+    out = io.StringIO()
+    r = _Renderer(out, lambda: 80, color=False)
+    r.feed("10:00:00  Iris:  hel")
+    assert "hel" not in out.getvalue()
+    r.feed("lo there")
+    r.flush()
+    assert out.getvalue().endswith("hello there")
+
+
 def test_null_transcript_writes_nothing():
     t = Transcript(None, "Iris")
     t.user("x"), t.word("y"), t.end(), t.close()     # must not raise
