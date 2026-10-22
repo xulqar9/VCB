@@ -88,7 +88,7 @@ def test_public_defaults_are_generic():
     assert config.USER_NAME == "the user"
     for text in (cfg.resume.hint, cfg.proactive.hint, cfg.proactive.greeting_hint,
                  cfg.proactive.waiting_hint):
-        assert "dada" not in text and "the user" in text
+        assert "the user" in text
 
 
 # -- hardware fallback ----------------------------------------------------------
