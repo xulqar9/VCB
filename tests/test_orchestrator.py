@@ -398,3 +398,74 @@ def test_lead_turn_skipped_while_busy():
         return orch._turn_task
 
     assert asyncio.run(_run()) is None
+
+
+def _lead_cues(orch, greeting_first=True, nudges=2):
+    """Start lead turns and capture the cue (last user message) each sends."""
+    cues = []
+
+    async def _fake_speak(messages, m, **_kw):
+        cues.append(messages[-1]["content"])
+        orch.convo.add_assistant("How's your day going?")
+
+    orch._speak_reply = _fake_speak
+
+    async def _run():
+        if greeting_first:
+            orch._start_lead_turn(greeting=True)
+            await orch._turn_task
+        for _ in range(nudges):
+            if orch._lead_wait() is None:
+                break
+            orch._start_lead_turn(greeting=False)
+            await orch._turn_task
+
+    asyncio.run(_run())
+    return cues
+
+
+def test_ai_led_backs_off_then_goes_quiet_when_ignored():
+    orch = _orch(_FakeLLM([]))
+    p = orch.cfg.proactive
+    assert orch._lead_wait() == p.idle_seconds
+    cues = _lead_cues(orch, greeting_first=True, nudges=5)
+    # Greeting, then one "no rush" line, then silence -- not endless questions.
+    assert cues == [p.greeting_hint, p.give_space_hint]
+    assert orch._lead_wait() is None
+
+
+def test_ai_led_without_greeting_nudges_then_gives_space():
+    orch = _orch(_FakeLLM([]))
+    p = orch.cfg.proactive
+    orch.convo.add_assistant("I love rainy days.")
+    cues = []
+
+    async def _fake_speak(messages, m, **_kw):
+        cues.append(messages[-1]["content"])
+
+    orch._speak_reply = _fake_speak
+
+    async def _run():
+        waits = []
+        while (w := orch._lead_wait()) is not None:
+            waits.append(w)
+            orch._start_lead_turn(greeting=False)
+            await orch._turn_task
+        return waits
+
+    waits = asyncio.run(_run())
+    assert waits == [p.idle_seconds, p.idle_seconds * p.idle_backoff]   # 10 s, then 20 s
+    assert cues == [p.hint, p.give_space_hint]
+
+
+def test_user_reply_rearms_ai_led():
+    async def _run():
+        orch = _orch(_FakeLLM(["Nice."]))
+        orch._unanswered_leads = orch.cfg.proactive.max_unanswered
+        assert orch._lead_wait() is None
+        await _drive_turn(orch, "I was out walking.")
+        return orch
+
+    orch = asyncio.run(_run())
+    assert orch._unanswered_leads == 0
+    assert orch._lead_wait() == orch.cfg.proactive.idle_seconds

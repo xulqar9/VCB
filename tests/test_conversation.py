@@ -64,3 +64,16 @@ def test_assistant_text_is_stripped():
     m = _mgr()
     m.add_assistant("  spaced  ")
     assert m.last_assistant() == "spaced"
+
+
+def test_back_to_back_user_utterances_merge():
+    # "It's incredible." ... pause ... "How about you?" with no reply between.
+    m = _mgr()
+    m.add_user("It's incredible.")
+    m.add_user("How about you?")
+    turns = [x for x in m.messages() if x["role"] != "system"]
+    assert turns == [{"role": "user", "content": "It's incredible. How about you?"}]
+    m.add_assistant("Doing great!")
+    m.add_user("Cool.")
+    assert [x["role"] for x in m.messages() if x["role"] != "system"] == [
+        "user", "assistant", "user"]

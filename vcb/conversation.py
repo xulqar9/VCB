@@ -9,7 +9,13 @@ class ConversationManager:
         self._history: list[dict[str, str]] = []
 
     def add_user(self, text: str) -> None:
-        self._history.append({"role": "user", "content": text})
+        # A pause mid-thought splits speech into two utterances ("It's great."
+        # ... "How about you?"); if the first got no reply, keep them as one
+        # message so the model answers the whole thing.
+        if self._history and self._history[-1]["role"] == "user":
+            self._history[-1]["content"] += " " + text
+        else:
+            self._history.append({"role": "user", "content": text})
 
     def add_assistant(self, text: str, interrupted: bool = False) -> None:
         # Store only what was actually spoken; no meta-marker, or the model

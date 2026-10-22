@@ -152,6 +152,8 @@ class Orchestrator:
         self._reply_drained = asyncio.Event()
         self._resume_budget = 0            # turns a cut-off thought stays resumable
         self._last_activity = time.monotonic()  # for AI-led idle detection
+        # AI-led turns in a row the user hasn't answered (reset when they speak).
+        self._unanswered_leads = 0
         self._user_speaking = False        # mic is mid-utterance right now
         self._session_id = time.strftime("%Y%m%d-%H%M%S")
         self._memory: MemoryStore | None = None
@@ -323,19 +325,29 @@ class Orchestrator:
 
     async def _idle_loop(self) -> None:
         """AI-led mode: when nobody's talking and no reply is in flight, wait
-        out the idle window, then let the assistant speak up on its own."""
-        p = self.cfg.proactive
+        out the idle window, then let the assistant speak up on its own. Each
+        unanswered nudge waits longer; after max_unanswered in a row it stays
+        quiet until the user speaks (see _run_turn)."""
         while True:
             await asyncio.sleep(1.0)
             try:
                 if self._snapshot().busy:
                     self._last_activity = time.monotonic()   # still busy; reset clock
                     continue
-                if time.monotonic() - self._last_activity >= p.idle_seconds:
+                wait = self._lead_wait()
+                if wait is not None and time.monotonic() - self._last_activity >= wait:
                     self._last_activity = time.monotonic()
                     self._start_lead_turn(greeting=False)
             except Exception:
                 log.exception("idle loop error, continuing")
+
+    def _lead_wait(self) -> float | None:
+        """Silence (s) before the next AI-led nudge; None = stay quiet until
+        the user speaks."""
+        p = self.cfg.proactive
+        if p.max_unanswered and self._unanswered_leads >= p.max_unanswered:
+            return None
+        return p.idle_seconds * (p.idle_backoff ** self._unanswered_leads)
 
     async def _tts_loop(self) -> None:
         prosody = self.cfg.prosody
@@ -517,6 +529,7 @@ class Orchestrator:
             if not text:
                 log.debug("empty transcript, ignoring")
                 return
+            self._unanswered_leads = 0          # they answered: AI-led may nudge again
             log.info("user: %s", text)
             self._transcript.user(text)
             self.convo.add_user(text)
@@ -554,12 +567,18 @@ class Orchestrator:
         p = self.cfg.proactive
         if greeting:
             cue = p.greeting_hint
+        elif (p.max_unanswered and self._unanswered_leads > 0
+              and self._unanswered_leads == p.max_unanswered - 1):
+            # Last nudge before going quiet: no more questions, just say
+            # there's no rush.
+            cue = p.give_space_hint
         else:
             # If she just asked a question and is waiting on an answer, don't
             # barrel into a brand-new topic; ease off gently instead.
             last = self.convo.last_assistant()
             waiting = bool(last and last.rstrip().endswith("?"))
             cue = p.waiting_hint if waiting else p.hint
+        self._unanswered_leads += 1
         # Deliver the nudge as a USER turn, not a trailing system message: this
         # model responds to user turns but tends to parrot trailing system text.
         # No tools_block: a lead turn is for chit-chat, not for firing tools

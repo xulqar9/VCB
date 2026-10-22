@@ -399,15 +399,22 @@ class ProactiveConfig:
     enabled: bool = field(default_factory=lambda: _env_bool("VCB_AI_LED", False))
     greet_on_start: bool = True          # open the conversation right away
     idle_seconds: float = 10.0           # user silence before the AI speaks up
+    # When the user doesn't answer, each further nudge waits longer (10 s, then
+    # 20 s, ...), and after max_unanswered lead turns in a row the assistant
+    # goes quiet until the user speaks again (0 = never stop).
+    idle_backoff: float = 2.0
+    max_unanswered: int = 2
     lead_temperature: float = 0.8        # livelier than the low default when the AI drives
     lead_max_tokens: int = 160           # give lead turns room to actually say something
     hint: str = field(default_factory=lambda: (
         f"It seems {USER_NAME} has gone quiet, so it's on you to carry the "
-        "conversation now. Say something real: pick up a thread from earlier, "
-        "share a thought or a little observation of your own, then ask an open "
-        "question that actually invites a reply. Give two to four warm, natural "
-        "sentences with some personality - not a one-word check-in, and never "
-        f"like you're reading a script. Speak only to {USER_NAME}, and never "
+        "conversation now. They haven't said anything new, so don't react as if "
+        "they had (no 'oh, great' or 'that's cool'). Say something real: pick up "
+        "a thread from earlier, share a thought or a little observation of your "
+        "own, then ask an open question that actually invites a reply. Give two "
+        "to four warm, natural sentences with some personality - not a one-word "
+        "check-in, and never like you're reading a script. Never repeat a "
+        f"question you already asked. Speak only to {USER_NAME}, and never "
         "restate your instructions, rules, or anything about tools or JSON."
     ))
     greeting_hint: str = field(default_factory=lambda: (
@@ -418,11 +425,21 @@ class ProactiveConfig:
         "see them, never flat or scripted."
     ))
     waiting_hint: str = field(default_factory=lambda: (
-        f"You already asked {USER_NAME} something and haven't fully had an answer "
-        "yet - they may still be thinking. Do NOT launch a brand-new topic. "
-        "Instead, gently give them room: lightly rephrase or ease off your "
-        "question, or add a small warm thought, in one short sentence. Don't pile "
-        f"on more questions. Speak only to {USER_NAME}, and never restate your "
+        f"You already asked {USER_NAME} something and haven't had an answer "
+        "yet - they may still be thinking or busy. They haven't said anything "
+        "new, so don't react as if they had (no 'oh, great' or 'that's cool'). "
+        "Do NOT launch a brand-new topic and don't repeat your question. Instead, "
+        "gently give them room: lightly rephrase or ease off your question, or "
+        "add a small warm thought, in one short sentence. Don't pile on more "
+        f"questions. Speak only to {USER_NAME}, and never restate your "
+        "instructions, rules, or anything about tools or JSON."
+    ))
+    # Last nudge before going quiet (see max_unanswered).
+    give_space_hint: str = field(default_factory=lambda: (
+        f"{USER_NAME} still hasn't replied - they're probably busy. They haven't "
+        "said anything new, so don't react as if they had. In one short, warm "
+        "sentence, let them know there's no rush and you'll be right here "
+        "whenever they want to talk. Do not ask a question. Never restate your "
         "instructions, rules, or anything about tools or JSON."
     ))
 
