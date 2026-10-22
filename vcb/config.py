@@ -330,8 +330,12 @@ class OllamaConfig:
     )
     api_key: str = "ollama"              # ignored by Ollama, but the client needs a value
     model: str = field(
-        default_factory=lambda: _env_str("VCB_OLLAMA_MODEL", "llama3.1:8b-instruct-q4_K_M")
+        default_factory=lambda: _env_str("VCB_OLLAMA_MODEL", "llama3.1:8b")
     )   # pulled automatically on first use if missing
+    # Context window VCB runs the model with. Ollama's own default can be 32k,
+    # which multiplies GPU memory use; a voice conversation + memory fits in
+    # far less. VCB applies this via a lightweight "<model>-vcb" copy.
+    num_ctx: int = field(default_factory=lambda: int(_env_str("VCB_OLLAMA_NUM_CTX", "8192")))
     # Ollama is normally started once as a background service (`ollama serve` or
     # the desktop app); leave this off and just make sure that's running. Turn it
     # on if you'd rather VCB launch/stop it for you each session.

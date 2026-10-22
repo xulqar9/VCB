@@ -67,7 +67,7 @@ Next time, `VCB.bat` starts in seconds. Change settings anytime with
 
 | | Option | Cost | Privacy | Setup |
 |---|---|---|---|---|
-| 🏠 | **Local (Ollama)** | Free | Everything stays on your PC | Install [Ollama](https://ollama.com/download) — VCB downloads the model for you |
+| 🏠 | **Local (Ollama)** | Free | Everything stays on your PC | Install [Ollama](https://ollama.com/download) — VCB recommends a model that fits your GPU and downloads it for you |
 | ☁️ | **Google Gemini** | Free tier | Text is sent to Google | Get a key at [aistudio.google.com/api-keys](https://aistudio.google.com/api-keys) |
 | ☁️ | **OpenAI / OpenRouter / Groq** | Pay per use | Text is sent to the provider | Paste an API key |
 | 🔧 | **llama.cpp** *(advanced)* | Free | Everything stays on your PC | Any `.gguf` model + `llama-server` |
@@ -81,6 +81,26 @@ Next time, `VCB.bat` starts in seconds. Change settings anytime with
 Speech recognition and the voice always run **on your PC** — with a cloud
 brain, only *text* is sent to the provider (the conversation, the persona, and
 any memories relevant to the current turn), never your audio.
+
+### Which local model fits my PC?
+
+You don't have to figure it out: the settings window reads your GPU's memory,
+subtracts what VCB's own speech models need and what you want to keep free for
+other apps, and **recommends the best model that fits** — every option is marked
+✓ fits or ✗ too big. At startup VCB also checks that the model really landed on
+the GPU and warns you if part of it spilled over to the (much slower) CPU.
+
+| Your GPU memory | With a cloned voice | With a preset voice |
+|---|---|---|
+| **8 GB** | Cloud recommended | `llama3.2:3b` |
+| **12 GB** | `llama3.2:3b` | `llama3.1:8b` |
+| **16 GB** | `llama3.1:8b` | `gemma3:12b` |
+| **24 GB** | `gemma3:12b` | `gemma3:27b` |
+| **32 GB+** | `gemma3:27b` | `gemma3:27b` |
+
+<sub>Measured: speech recognition ~2.2 GB, cloned voice (Chatterbox) ~4.7 GB,
+preset voice (Kokoro) ~0.7 GB; 2 GB kept free. VCB runs Ollama models with an
+8k-token context, which needs far less memory than Ollama's default.</sub>
 
 ## 🗣️ Voices
 
@@ -197,6 +217,15 @@ smaller models (4–8B) answer fastest.
 </details>
 
 <details>
+<summary><b>Replies are slow with a local model</b></summary>
+
+Check the log at startup: if VCB warns that only part of the model fits in GPU
+memory, the rest runs on the CPU. Open the settings and pick a model marked
+✓ fits (or click **Use recommended**), switch to the Preset voice to free ~4 GB,
+or close other GPU-heavy apps.
+</details>
+
+<details>
 <summary><b>"My API account is out of credit"</b></summary>
 
 OpenAI's API is prepaid and separate from a ChatGPT subscription. Add credit at
@@ -236,7 +265,7 @@ uv pip install torch==2.7.1 torchaudio==2.7.1 -r requirements.txt `
 python -m pytest
 ```
 
-The test suite (120+ tests) runs without a GPU, audio device, or LLM server and
+The test suite (130 tests) runs without a GPU, audio device, or LLM server and
 covers the parts that are easy to get subtly wrong in a streaming system:
 barge-in and stale-audio rejection, retry safety, resume, transcript pacing,
 memory, tools, and config resolution.

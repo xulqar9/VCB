@@ -172,6 +172,75 @@ def _ollama_pull(base: str, model: str) -> None:
     log.info("model %r ready", model)
 
 
+def _ollama_post(base: str, path: str, body: dict, timeout: float | None = 30) -> bytes:
+    req = urllib.request.Request(
+        f"{base}{path}", data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def ollama_sized_name(model: str, num_ctx: int) -> str:
+    """Name of VCB's copy of `model` with a fixed context, e.g.
+    'llama3.1:8b' -> 'llama3.1:8b-vcb8k' (a bare name gets ':latest')."""
+    tagged = model if ":" in model else f"{model}:latest"
+    return f"{tagged}-vcb{num_ctx // 1024}k"
+
+
+def _ollama_sized_copy(base: str, model: str, num_ctx: int) -> str:
+    """Create (or refresh) a copy of the model whose default context is
+    num_ctx. The OpenAI-compatible endpoint can't pass num_ctx per request,
+    and Ollama's default context can use several times the GPU memory VCB
+    needs. The copy shares the original's files, so it costs no disk space."""
+    name = ollama_sized_name(model, num_ctx)
+    try:
+        _ollama_post(base, "/api/create", {
+            "model": name, "from": model,
+            "parameters": {"num_ctx": num_ctx}, "stream": False,
+        })
+    except (urllib.error.URLError, OSError) as exc:
+        log.warning("couldn't set Ollama's context size (%s); using %r as is -- "
+                    "it may use more GPU memory than needed. Updating Ollama "
+                    "usually fixes this.", exc, model)
+        return model
+    log.info("using %r (%r with a %d-token context)", name, model, num_ctx)
+    return name
+
+
+def ollama_fit_warning(entry: dict) -> str | None:
+    """Warning text if a loaded model (an /api/ps entry) isn't fully on the GPU."""
+    size, vram = entry.get("size") or 0, entry.get("size_vram") or 0
+    if size <= 0 or vram >= size * 0.98:
+        return None
+    pct = int(vram * 100 / size)
+    return (f"only {pct}% of model {entry.get('name')!r} fits in GPU memory; the "
+            "rest runs on the CPU, so replies will be slow. Pick a smaller "
+            "model in VCB settings (it recommends one that fits), use the "
+            "Preset voice to free GPU memory, or close other GPU-heavy apps.")
+
+
+def _ollama_preload_and_check(base: str, model: str) -> None:
+    """Load the model now (so the first reply doesn't wait for it) and warn
+    if it spilled over to the CPU."""
+    log.info("loading %r into memory...", model)
+    try:
+        _ollama_post(base, "/api/generate", {"model": model}, timeout=600)
+        with urllib.request.urlopen(f"{base}/api/ps", timeout=10) as resp:
+            running = json.loads(resp.read()).get("models", [])
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        log.warning("couldn't preload %r (%s); it will load on the first reply", model, exc)
+        return
+    for entry in running:
+        if entry.get("name") == model or entry.get("model") == model:
+            warning = ollama_fit_warning(entry)
+            if warning:
+                log.warning(warning)
+            else:
+                log.info("model loaded fully on the GPU (%.1f GB)",
+                         entry.get("size_vram", 0) / 2**30)
+
+
 class ManagedProcesses:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
@@ -263,6 +332,9 @@ class ManagedProcesses:
             tags = json.loads(resp.read())
         if not ollama_has_model(tags, ocfg.model):
             _ollama_pull(base, ocfg.model)
+        if ocfg.num_ctx > 0:
+            self.cfg.llm.model = _ollama_sized_copy(base, ocfg.model, ocfg.num_ctx)
+        _ollama_preload_and_check(base, self.cfg.llm.model)
 
     def _wait_for_health(self, url: str, timeout_s: float, required: bool = True) -> None:
         deadline = time.monotonic() + timeout_s

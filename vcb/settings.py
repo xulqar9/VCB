@@ -17,6 +17,10 @@ from tkinter import filedialog, messagebox, ttk
 
 from .config import ENV_FILE, USER_DIR, available_prompts, resolve_path
 from .envfile import read_env, update_env
+from .gpu import (
+    DEFAULT_RESERVE_GB, OLLAMA_CHOICES, ModelChoice, detect_gpus, estimate_vram_gb,
+    llm_budget_gb, recommend, speech_vram_gb,
+)
 
 DEFAULT_LABEL = "System default"
 
@@ -39,13 +43,7 @@ PROVIDER_KEY_PAGES = {
     "OpenRouter": "https://openrouter.ai/keys",
     "Groq": "https://console.groq.com/keys",
 }
-OLLAMA_MODELS = (
-    "llama3.1:8b-instruct-q4_K_M",
-    "qwen2.5:7b-instruct",
-    "gemma3:4b",
-    "gemma3:12b",
-    "mistral-nemo:12b",
-)
+RESERVE_CHOICES = ("1", "2", "4", "6", "8")     # GB kept free for other apps
 KOKORO_VOICES = (
     "af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky",
     "am_adam", "am_michael", "bf_emma", "bf_isabella", "bm_george", "bm_lewis",
@@ -73,6 +71,32 @@ def _audio_devices(kind: str) -> list[str]:
         return list_devices(kind)
     except Exception:
         return []
+
+
+def _ollama_installed_models(base_url: str) -> list[ModelChoice]:
+    """Models already downloaded in Ollama (offered alongside the suggestions)."""
+    try:
+        import json
+        url = base_url.removesuffix("/v1").rstrip("/") + "/api/tags"
+        with urllib.request.urlopen(url, timeout=1.5) as resp:
+            models = json.loads(resp.read()).get("models", [])
+    except Exception:
+        return []
+    return [ModelChoice(m["name"], round(m.get("size", 0) / 2**30, 2), "installed")
+            for m in models if "-vcb" not in m.get("name", "")]
+
+
+def model_label(choice: ModelChoice, budget_gb: float | None) -> str:
+    """Dropdown text: tag first (saved as the value), then size and whether
+    it fits next to VCB's speech models."""
+    fit = "" if budget_gb is None else (
+        "  ✓ fits" if choice.vram_gb <= budget_gb else "  ✗ too big")
+    return (f"{choice.tag}   ({choice.note}, {choice.download_gb:.1f} GB download, "
+            f"needs ~{choice.vram_gb:.1f} GB){fit}")
+
+
+def model_tag(label: str) -> str:
+    return label.strip().split(" ", 1)[0] if label.strip() else ""
 
 
 def _guess_provider(base_url: str) -> str:
@@ -111,17 +135,37 @@ class SettingsWindow:
         self.row += 1
 
         self.ollama_box = self._group()
-        self.ollama_model = tk.StringVar(
-            value=get("VCB_OLLAMA_MODEL", OLLAMA_MODELS[0]))
-        self._combo(self.ollama_box, 0, "Model", self.ollama_model, OLLAMA_MODELS,
-                    hint="downloaded automatically on first start")
+        self.ollama_base = get("VCB_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+        self.gpus = detect_gpus()
+        installed = _ollama_installed_models(self.ollama_base)
+        known = {c.tag for c in OLLAMA_CHOICES}
+        self.model_choices = list(OLLAMA_CHOICES) + [c for c in installed if c.tag not in known]
+        self.installed_tags = {c.tag for c in installed}
+        self.ollama_model = tk.StringVar(value=get("VCB_OLLAMA_MODEL"))
+        self.model_combo = self._combo(self.ollama_box, 0, "Model", self.ollama_model, (),
+                                       width=78)
+        self.gpu_info = ttk.Label(self.ollama_box, foreground="gray", wraplength=560,
+                                  justify="left")
+        self.gpu_info.grid(row=1, column=1, columnspan=2, sticky="w")
+        self.reserve = tk.StringVar(value=get("VCB_VRAM_RESERVE_GB",
+                                              str(int(DEFAULT_RESERVE_GB))))
+        reserve_row = ttk.Frame(self.ollama_box)
+        reserve_row.grid(row=2, column=1, columnspan=2, sticky="w", pady=2)
+        ttk.Label(reserve_row, text="Keep free for other apps:").pack(side="left")
+        rcb = ttk.Combobox(reserve_row, textvariable=self.reserve, values=RESERVE_CHOICES,
+                           width=3, state="readonly")
+        rcb.pack(side="left", padx=4)
+        rcb.bind("<<ComboboxSelected>>", lambda _e: self._update_models())
+        ttk.Label(reserve_row, text="GB").pack(side="left")
+        ttk.Button(reserve_row, text="Use recommended",
+                   command=self._use_recommended).pack(side="left", padx=(12, 0))
         self.ollama_status = ttk.Label(self.ollama_box, foreground="gray")
-        self.ollama_status.grid(row=1, column=1, sticky="w")
+        self.ollama_status.grid(row=3, column=1, sticky="w")
         self.ollama_link = ttk.Button(
             self.ollama_box, text="Get Ollama",
             command=lambda: webbrowser.open("https://ollama.com/download"))
-        self.ollama_link.grid(row=1, column=2, sticky="e")
-        self.ollama_base = get("VCB_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+        self.ollama_link.grid(row=3, column=2, sticky="e")
+        self.first_model_pick = "VCB_OLLAMA_MODEL" not in env
 
         self.cloud_box = self._group()
         default_url, default_model, default_effort = CLOUD_PROVIDERS["Google Gemini (free tier)"]
@@ -246,9 +290,9 @@ class SettingsWindow:
         self._hint(parent, row, hint)
         return e
 
-    def _combo(self, parent, row, label, var, values, readonly=False, hint=None):
+    def _combo(self, parent, row, label, var, values, readonly=False, hint=None, width=42):
         ttk.Label(parent, text=label, width=13).grid(row=row, column=0, sticky="w", pady=2)
-        cb = ttk.Combobox(parent, textvariable=var, values=list(values), width=42,
+        cb = ttk.Combobox(parent, textvariable=var, values=list(values), width=width,
                           state="readonly" if readonly else "normal")
         cb.grid(row=row, column=1, sticky="ew", pady=2)
         self._hint(parent, row, hint)
@@ -278,6 +322,7 @@ class SettingsWindow:
         self.clone_box.grid() if engine != "kokoro" else self.clone_box.grid_remove()
         self.kokoro_box.grid() if engine == "kokoro" else self.kokoro_box.grid_remove()
         if backend == "ollama":
+            self._update_models()
             if _ollama_running(self.ollama_base):
                 self.ollama_status.config(text="Ollama is running", foreground="green")
                 self.ollama_link.grid_remove()
@@ -289,6 +334,63 @@ class SettingsWindow:
                 self.ollama_status.config(
                     text="Ollama not found - install it first", foreground="red")
                 self.ollama_link.grid()
+
+    def _budget(self) -> float | None:
+        """GPU memory left for the LLM, or None without an NVIDIA GPU."""
+        if not self.gpus:
+            return None
+        try:
+            reserve = float(self.reserve.get())
+        except ValueError:
+            reserve = DEFAULT_RESERVE_GB
+        return llm_budget_gb(self.gpus, self.engine.get(), reserve)
+
+    def _update_models(self) -> None:
+        """Re-label the model list (fits / too big) for the current voice
+        engine and reserve, and explain the GPU budget."""
+        budget = self._budget()
+        labels = []
+        for c in self.model_choices:
+            label = model_label(c, budget)
+            if c.tag in self.installed_tags:
+                label += "  (installed)"
+            labels.append(label)
+        self.model_combo.config(values=labels)
+        best = recommend(budget) if budget is not None else None
+        current = model_tag(self.ollama_model.get())
+        if self.first_model_pick:
+            current = (best or OLLAMA_CHOICES[0]).tag
+            self.first_model_pick = False
+        by_tag = {model_tag(lbl): lbl for lbl in labels}
+        self.ollama_model.set(by_tag.get(current, current))
+        self.recommended = best
+
+        speech = speech_vram_gb(self.engine.get())
+        if budget is None:
+            self.gpu_info.config(
+                foreground="#b06000",
+                text="No NVIDIA GPU found: a local model would run on the CPU and "
+                     "answer slowly. The Cloud API option is recommended.")
+            return
+        gpus = " + ".join(f"{g.name} ({g.total_gb:.0f} GB)" for g in self.gpus)
+        text = (f"{gpus}. VCB's speech recognition + voice use ~{speech:.1f} GB, "
+                f"leaving ~{budget:.1f} GB for the model.")
+        if best is None:
+            options = ("switch to the Preset voice (frees ~4 GB) or use the Cloud API option."
+                       if self.engine.get() != "kokoro" else "use the Cloud API option.")
+            self.gpu_info.config(
+                foreground="#b06000",
+                text=text + " That's not enough for a local model: " + options)
+        else:
+            self.gpu_info.config(foreground="gray",
+                                 text=text + f" Recommended: {best.tag}.")
+
+    def _use_recommended(self) -> None:
+        self._update_models()
+        if self.recommended is not None:
+            self.ollama_model.set(
+                next(lbl for lbl in self.model_combo.cget("values")
+                     if model_tag(lbl) == self.recommended.tag))
 
     def _provider_changed(self, _event=None) -> None:
         url, model, effort = CLOUD_PROVIDERS[self.provider.get()]
@@ -340,6 +442,9 @@ class SettingsWindow:
         if backend == "llama_cpp" and not self.gguf.get().strip():
             messagebox.showerror("VCB settings", "Choose a .gguf model file.")
             return
+        if backend == "ollama" and not model_tag(self.ollama_model.get()):
+            messagebox.showerror("VCB settings", "Choose a model for Ollama.")
+            return
         voice = self.voice_wav.get().strip()
         if voice and not Path(resolve_path(voice)).is_file():
             messagebox.showerror("VCB settings", f"Voice sample not found:\n{voice}")
@@ -348,7 +453,8 @@ class SettingsWindow:
         bool_str = lambda v: "true" if v.get() else "false"  # noqa: E731
         updates: dict[str, str | None] = {
             "VCB_BACKEND": backend,
-            "VCB_OLLAMA_MODEL": self.ollama_model.get().strip(),
+            "VCB_OLLAMA_MODEL": model_tag(self.ollama_model.get()) or None,
+            "VCB_VRAM_RESERVE_GB": self.reserve.get(),
             "VCB_CLOUD_BASE_URL": self.cloud_url.get().strip(),
             "VCB_CLOUD_API_KEY": self.cloud_key.get().strip() or None,
             "VCB_CLOUD_MODEL": self.cloud_model.get().strip(),

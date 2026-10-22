@@ -1,0 +1,116 @@
+"""GPU memory budgeting for picking a local (Ollama) model that fits.
+
+VCB's own speech models share the GPU with the LLM, and the user needs some
+room left for other apps, so the LLM's budget is:
+
+    total VRAM - speech models (STT + chosen voice) - reserve for other apps
+
+Figures below were measured on an RTX 5060 Ti / 3090 Ti; the per-model VRAM
+estimate is calibrated against Ollama's own reported usage at VCB's 8k context.
+Uses nvidia-smi only (no torch), so it works in the settings window before the
+heavy dependencies are installed.
+"""
+
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+# Measured GPU memory of VCB's speech stack (GB).
+STT_VRAM_GB = 2.2                          # faster-whisper large-v3-turbo, float16
+TTS_VRAM_GB = {"chatterbox-turbo": 4.7, "kokoro": 0.7}
+TTS_VRAM_DEFAULT_GB = 4.7                  # optional engines: assume a heavy one
+
+DEFAULT_RESERVE_GB = 2.0                   # left free for the desktop, browser, games
+
+
+@dataclass(frozen=True)
+class GPU:
+    name: str
+    total_gb: float
+
+
+@dataclass(frozen=True)
+class ModelChoice:
+    tag: str
+    download_gb: float                     # weights (+ vision projector), from the registry
+    note: str
+
+    @property
+    def vram_gb(self) -> float:
+        return estimate_vram_gb(self.download_gb)
+
+
+# Conversational, non-"thinking" models (thinking models stall the voice for
+# seconds before the first word), smallest to largest = roughly worst to best.
+OLLAMA_CHOICES: tuple[ModelChoice, ...] = (
+    ModelChoice("llama3.2:3b", 1.88, "small and fast"),
+    ModelChoice("gemma3:4b", 3.12, "small, natural chat"),
+    ModelChoice("llama3.1:8b", 4.58, "good all-rounder"),
+    ModelChoice("mistral-nemo:12b", 6.59, "great conversation"),
+    ModelChoice("gemma3:12b", 7.61, "great conversation"),
+    ModelChoice("mistral-small:24b", 13.35, "very capable"),
+    ModelChoice("gemma3:27b", 16.22, "best quality"),
+)
+
+
+def estimate_vram_gb(download_gb: float) -> float:
+    """GPU memory Ollama needs for a model at VCB's 8k context (weights + KV
+    cache + compute buffers). Calibrated: llama3.2:3b 1.88 -> 2.9 GB,
+    qwen2.5:32b 18.5 -> 21.3 GB."""
+    return round(download_gb * 1.12 + 0.8, 1)
+
+
+def _nvidia_smi() -> str | None:
+    exe = shutil.which("nvidia-smi")
+    if exe is None:
+        fallback = Path(r"C:\Windows\System32\nvidia-smi.exe")
+        exe = str(fallback) if fallback.is_file() else None
+    return exe
+
+
+def parse_nvidia_smi(output: str) -> list[GPU]:
+    gpus = []
+    for line in output.strip().splitlines():
+        name, _, mib = line.rpartition(",")
+        try:
+            gpus.append(GPU(name.strip(), round(int(mib.strip()) / 1024, 1)))
+        except ValueError:
+            continue
+    return gpus
+
+
+def detect_gpus() -> list[GPU]:
+    """NVIDIA GPUs and their total memory; [] if none / no driver."""
+    exe = _nvidia_smi()
+    if exe is None:
+        return []
+    try:
+        out = subprocess.run(
+            [exe, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return parse_nvidia_smi(out)
+
+
+def speech_vram_gb(tts_engine: str) -> float:
+    return STT_VRAM_GB + TTS_VRAM_GB.get(tts_engine, TTS_VRAM_DEFAULT_GB)
+
+
+def llm_budget_gb(gpus: list[GPU], tts_engine: str, reserve_gb: float) -> float:
+    """GPU memory left for the LLM. Ollama can split a model over several
+    GPUs, so their memory adds up (one fast GPU is still better)."""
+    if not gpus:
+        return 0.0
+    total = sum(g.total_gb for g in gpus)
+    return round(max(0.0, total - speech_vram_gb(tts_engine) - reserve_gb), 1)
+
+
+def recommend(budget_gb: float,
+              choices: tuple[ModelChoice, ...] = OLLAMA_CHOICES) -> ModelChoice | None:
+    """Largest model that fits the budget, or None if even the smallest doesn't."""
+    fitting = [c for c in choices if c.vram_gb <= budget_gb]
+    return fitting[-1] if fitting else None
