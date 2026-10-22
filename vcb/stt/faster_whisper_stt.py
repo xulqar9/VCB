@@ -41,11 +41,14 @@ class FasterWhisperSTT(STTEngine):
             return WhisperModel(
                 self.cfg.model,
                 device=self.cfg.device,
+                device_index=self.cfg.device_index,
                 compute_type=self.cfg.compute_type,
             )
 
         self._model = await asyncio.to_thread(_load)
-        log.info("faster-whisper '%s' loaded on %s", self.cfg.model, self.cfg.device)
+        where = (f"cuda:{self.cfg.device_index}" if self.cfg.device == "cuda"
+                 else self.cfg.device)
+        log.info("faster-whisper '%s' loaded on %s", self.cfg.model, where)
 
     async def transcribe(self, audio: np.ndarray, sample_rate: int) -> str:
         assert self._model is not None, "call load() first"

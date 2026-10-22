@@ -27,7 +27,7 @@ class KokoroTTS(TTSEngine):
         lang = self.cfg.voice[0] if self.cfg.voice[:1] in ("a", "b") else self.cfg.lang_code
 
         def _load():
-            return KPipeline(lang_code=lang)
+            return KPipeline(lang_code=lang, device=self.cfg.device)
 
         self._pipeline = await asyncio.to_thread(_load)
         log.info("kokoro loaded (voice=%s)", self.cfg.voice)

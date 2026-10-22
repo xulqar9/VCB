@@ -114,3 +114,52 @@ def recommend(budget_gb: float,
     """Largest model that fits the budget, or None if even the smallest doesn't."""
     fitting = [c for c in choices if c.vram_gb <= budget_gb]
     return fitting[-1] if fitting else None
+
+
+# -- placing VCB's own models on GPUs ----------------------------------------
+
+def query_free_gb() -> dict[int, float]:
+    """Free memory per GPU right now, keyed by nvidia-smi index (PCI order)."""
+    exe = _nvidia_smi()
+    if exe is None:
+        return {}
+    try:
+        out = subprocess.run(
+            [exe, "--query-gpu=index,memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    free = {}
+    for line in out.strip().splitlines():
+        idx, _, mib = line.partition(",")
+        try:
+            free[int(idx)] = round(int(mib.strip()) / 1024, 2)
+        except ValueError:
+            continue
+    return free
+
+
+def visible_gpus(cuda_visible_devices: str | None, physical: list[int]) -> list[int] | None:
+    """Physical GPU indices this process can use, in CUDA's (logical) order.
+    None if CUDA_VISIBLE_DEVICES uses a form we can't map (e.g. UUIDs)."""
+    if cuda_visible_devices is None or not cuda_visible_devices.strip():
+        return sorted(physical)
+    try:
+        ids = [int(x) for x in cuda_visible_devices.split(",") if x.strip()]
+    except ValueError:
+        return None
+    return [i for i in ids if i in physical]
+
+
+def plan_placement(free_gb: dict[int, float], needs_gb: dict[str, float]) -> dict[str, int]:
+    """Assign each model (biggest first) to the GPU with the most free memory,
+    accounting for what earlier models took. Returns name -> physical index."""
+    remaining = dict(free_gb)
+    plan = {}
+    for name, need in sorted(needs_gb.items(), key=lambda kv: -kv[1]):
+        best = max(remaining, key=lambda i: remaining[i])
+        plan[name] = best
+        remaining[best] -= need
+    return plan

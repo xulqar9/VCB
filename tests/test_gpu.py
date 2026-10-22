@@ -71,3 +71,62 @@ def test_fit_warning_only_when_spilling_to_cpu():
     assert ollama_fit_warning({"name": "m", "size": 6 * gib, "size_vram": 6 * gib}) is None
     warning = ollama_fit_warning({"name": "m", "size": 10 * gib, "size_vram": 6 * gib})
     assert warning and "60%" in warning and "smaller model" in warning
+
+
+# -- spreading STT / TTS over GPUs ----------------------------------------------
+
+from vcb.gpu import plan_placement, visible_gpus  # noqa: E402
+
+
+def test_plan_puts_biggest_model_on_emptiest_gpu_then_spreads():
+    # After the LLM loaded: GPU 0 has 9.6 GB free, GPU 1 7.2 GB.
+    plan = plan_placement({0: 9.6, 1: 7.2}, {"stt": 2.2, "tts": 4.7})
+    assert plan == {"tts": 0, "stt": 1}           # 9.6-4.7=4.9 < 7.2 -> STT on GPU 1
+    # Plenty of room on one card: both go there.
+    assert plan_placement({0: 20.0, 1: 3.0}, {"stt": 2.2, "tts": 4.7}) == {"tts": 0, "stt": 0}
+
+
+def test_visible_gpus_maps_cuda_visible_devices():
+    assert visible_gpus(None, [1, 0]) == [0, 1]
+    assert visible_gpus("", [0, 1]) == [0, 1]
+    assert visible_gpus("1", [0, 1]) == [1]
+    assert visible_gpus("1,0", [0, 1]) == [1, 0]          # CUDA order follows the list
+    assert visible_gpus("GPU-abc", [0, 1]) is None
+
+
+def test_place_on_gpus_sets_devices(monkeypatch):
+    from vcb import gpu, hardware
+    from vcb.config import AppConfig
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setattr(gpu, "query_free_gb", lambda: {0: 9.6, 1: 7.2})
+    cfg = AppConfig()
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", has_cuda=True)
+    assert cfg.tts.device == "cuda:0" and cfg.stt.device_index == 1
+
+    # With CUDA_VISIBLE_DEVICES=1,0 the physical GPU 1 is CUDA's index 0.
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1,0")
+    cfg = AppConfig()
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", has_cuda=True)
+    assert cfg.tts.device == "cuda:1" and cfg.stt.device_index == 0
+
+
+def test_place_on_gpus_respects_single_gpu_and_explicit_devices(monkeypatch):
+    from vcb import gpu, hardware
+    from vcb.config import AppConfig
+
+    monkeypatch.setattr(gpu, "query_free_gb", lambda: {0: 9.6, 1: 7.2})
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")        # user pinned one GPU
+    cfg = AppConfig()
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", has_cuda=True)
+    assert cfg.tts.device == "cuda" and cfg.stt.device_index == 0
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES")
+    cfg = AppConfig()
+    cfg.tts.device = "cuda:1"                                # explicit choice wins
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", has_cuda=True)
+    assert cfg.tts.device == "cuda:1"
+
+    cfg = AppConfig()
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", has_cuda=False)
+    assert cfg.tts.device == "cuda"

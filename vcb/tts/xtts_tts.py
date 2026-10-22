@@ -30,7 +30,7 @@ class XTTSv2TTS(TTSEngine):
         def _load():
             from TTS.api import TTS
 
-            api = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to("cuda")
+            api = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.cfg.device)
             model = api.synthesizer.tts_model
             gpt_cond, spk_emb = model.get_conditioning_latents(
                 audio_path=[resolve_path(self.cfg.voice_wav)]

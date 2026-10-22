@@ -23,11 +23,13 @@ os.chdir(Path(__file__).resolve().parent)
 # itself doesn't import torch, so CUDA isn't initialized yet.
 from vcb import config as _config  # noqa: E402
 
+# PCI order makes CUDA's GPU indices match nvidia-smi's, which VCB uses to
+# spread its models over the GPUs with the most free memory.
+os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
 # Optionally restrict ALL of VCB's GPU work (STT, TTS, llama-server) to some
 # GPUs, e.g. VCB_CUDA_DEVICES=1 to leave GPU 0 free for a game or Unreal.
-# PCI order makes the indices match nvidia-smi. Unset = use every GPU.
+# Unset = use every GPU.
 if _config._env_opt_str("VCB_CUDA_DEVICES"):
-    os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", os.environ["VCB_CUDA_DEVICES"])
 
 import argparse  # noqa: E402
@@ -36,7 +38,7 @@ import contextlib  # noqa: E402
 import logging  # noqa: E402
 
 from vcb.config import AppConfig, available_prompts, build_action_instructions, load_system_prompt  # noqa: E402
-from vcb.hardware import adapt_to_hardware, cuda_available  # noqa: E402
+from vcb.hardware import adapt_to_hardware, cuda_available, place_on_gpus  # noqa: E402
 from vcb.llm import OpenAICompatLLM  # noqa: E402
 from vcb.orchestrator import Orchestrator, speaker_name  # noqa: E402
 from vcb.runtime import ManagedProcesses, setup_logging  # noqa: E402
@@ -156,10 +158,14 @@ def main() -> None:
         log.warning("%s=%r from this terminal's environment overrides .env (%r). "
                     "If you changed settings, open a new terminal or run VCB.bat.",
                     key, env_value, file_value)
-    tts_engine = adapt_to_hardware(cfg, TTS_ENGINE, cuda_available())
+    has_cuda = cuda_available()
+    tts_engine = adapt_to_hardware(cfg, TTS_ENGINE, has_cuda)
     procs = ManagedProcesses(cfg)
     try:
         procs.start_server()                 # blocks until the backend is ready
+        # The LLM is loaded now, so free GPU memory is what's really left for
+        # speech recognition and the voice.
+        place_on_gpus(cfg, tts_engine, has_cuda)
         procs.start_transcript_window(transcript, speaker_name(cfg.llm.system_prompt))
         asyncio.run(amain(cfg, tts_engine, transcript))
     except KeyboardInterrupt:

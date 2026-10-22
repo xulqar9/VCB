@@ -90,6 +90,11 @@ other apps, and **recommends the best model that fits** — every option is mark
 ✓ fits or ✗ too big. At startup VCB also checks that the model really landed on
 the GPU and warns you if part of it spilled over to the (much slower) CPU.
 
+**Got more than one GPU?** Their memory adds up. Ollama spreads the language
+model over them, and once it's loaded VCB puts speech recognition and the voice
+on whichever GPUs have the most free memory left — no setup needed. (To keep a
+GPU free for a game or other work, set `VCB_CUDA_DEVICES` in `.env`.)
+
 | Your GPU memory | With a cloned voice | With a preset voice |
 |---|---|---|
 | **8 GB** | Cloud recommended | `llama3.2:3b` |
@@ -265,7 +270,7 @@ uv pip install torch==2.7.1 torchaudio==2.7.1 -r requirements.txt `
 python -m pytest
 ```
 
-The test suite (130 tests) runs without a GPU, audio device, or LLM server and
+The test suite (130+ tests) runs without a GPU, audio device, or LLM server and
 covers the parts that are easy to get subtly wrong in a streaming system:
 barge-in and stale-audio rejection, retry safety, resume, transcript pacing,
 memory, tools, and config resolution.

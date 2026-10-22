@@ -139,6 +139,7 @@ class VADConfig:
 class STTConfig:
     model: str = "large-v3-turbo"        # faster-whisper model name or path
     device: str = "cuda"                 # main.py drops to cpu if no CUDA GPU
+    device_index: int = 0                # which GPU; chosen automatically with several
     compute_type: str = "float16"
     cpu_model: str = "small"             # used instead when running on CPU
     cpu_compute_type: str = "int8"
@@ -182,7 +183,9 @@ class TTSConfig:
     voice_wav: str = field(
         default_factory=lambda: _env_str("VCB_VOICE_WAV", r"user\voice.wav")
     )
-    device: str = "cuda"                 # chatterbox device; main.py drops to cpu if no GPU
+    # TTS device ("cuda" = picked automatically when there are several GPUs,
+    # "cuda:N" = that GPU, "cpu"); main.py drops to cpu if there's no GPU.
+    device: str = "cuda"
     language: str = "en"                 # xtts language
     exaggeration: float = 0.5            # chatterbox emotion intensity (0-1)
     # orpheus (preset voices, emits <laugh>/<sigh>/etc.)
