@@ -38,12 +38,20 @@ class FasterWhisperSTT(STTEngine):
         from faster_whisper import WhisperModel
 
         def _load():
-            return WhisperModel(
+            model = WhisperModel(
                 self.cfg.model,
                 device=self.cfg.device,
                 device_index=self.cfg.device_index,
                 compute_type=self.cfg.compute_type,
             )
+            # The first transcription pays one-time GPU setup costs (seconds);
+            # do it now on a second of silence, not on the user's first words.
+            segments, _info = model.transcribe(
+                np.zeros(16_000, dtype=np.float32), language=self.cfg.language,
+                beam_size=1,
+            )
+            list(segments)
+            return model
 
         self._model = await asyncio.to_thread(_load)
         where = (f"cuda:{self.cfg.device_index}" if self.cfg.device == "cuda"

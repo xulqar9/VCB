@@ -60,6 +60,10 @@ class ChatterboxTurboTTS(TTSEngine):
             model = _Turbo.from_pretrained(device=self.cfg.device)
             if has_voice:
                 model.prepare_conditionals(voice, exaggeration=self.cfg.exaggeration)
+            # The first generation pays one-time costs (lazy watermarker load,
+            # CUDA kernel selection, allocator growth) -- several seconds live.
+            # Pay them now instead of on the user's first reply.
+            model.generate("Hello there, nice to meet you.")
             return model
 
         self._model = await asyncio.to_thread(_load)
