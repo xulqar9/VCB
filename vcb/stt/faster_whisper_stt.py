@@ -58,7 +58,8 @@ class FasterWhisperSTT(STTEngine):
                  else self.cfg.device)
         log.info("faster-whisper '%s' loaded on %s", self.cfg.model, where)
 
-    async def transcribe(self, audio: np.ndarray, sample_rate: int) -> str:
+    async def transcribe(self, audio: np.ndarray, sample_rate: int,
+                         context: str | None = None) -> str:
         assert self._model is not None, "call load() first"
         if sample_rate != 16_000:
             raise ValueError("faster-whisper expects 16 kHz audio")
@@ -70,6 +71,9 @@ class FasterWhisperSTT(STTEngine):
                 beam_size=self.cfg.beam_size,
                 vad_filter=False,        # we already segmented with Silero
                 condition_on_previous_text=False,
+                # Recent conversation + known names/jargon steer spelling
+                # ("Plat 3", "boost") without changing what was said.
+                initial_prompt=context or None,
             )
             return " ".join(s.text.strip() for s in segments).strip()
 

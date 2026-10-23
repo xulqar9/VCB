@@ -66,6 +66,15 @@ class VADSegmenter:
         self._silence_frames = 0
         self._utterance: list[np.ndarray] = []
 
+    @property
+    def voiced_s(self) -> float:
+        """Seconds of actual speech (not pauses) in the utterance so far; 0
+        when the user isn't mid-utterance. Lets barge-in tell a quick "yeah"
+        from someone really starting to talk."""
+        if not self._in_speech:
+            return 0.0
+        return self._speech_frames * self.audio_cfg.frame_ms / 1000.0
+
     @torch.inference_mode()
     def _speech_prob(self, frame_f32: np.ndarray) -> float:
         tensor = torch.from_numpy(frame_f32)

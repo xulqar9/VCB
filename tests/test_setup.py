@@ -86,8 +86,7 @@ def test_public_defaults_are_generic():
     assert cfg.backend == "ollama"
     assert cfg.server.cuda_visible_devices is None
     assert config.USER_NAME == "the user"
-    for text in (cfg.resume.hint, cfg.proactive.hint, cfg.proactive.greeting_hint,
-                 cfg.proactive.waiting_hint):
+    for text in (cfg.resume.hint, cfg.proactive.hint, cfg.proactive.greeting_hint):
         assert "the user" in text
 
 

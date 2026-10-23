@@ -10,8 +10,11 @@ class STTEngine(ABC):
     async def load(self) -> None: ...
 
     @abstractmethod
-    async def transcribe(self, audio: np.ndarray, sample_rate: int) -> str:
-        """audio: float32 mono. Returns transcript text (may be empty)."""
+    async def transcribe(self, audio: np.ndarray, sample_rate: int,
+                         context: str | None = None) -> str:
+        """audio: float32 mono. context: recent conversation / vocabulary that
+        may help recognition (engines may ignore it). Returns transcript text
+        (may be empty)."""
 
     @abstractmethod
     async def close(self) -> None: ...

@@ -33,7 +33,8 @@ say *"go on"*. One double-click to install, no Python setup required.
 |   |   |
 |---|---|
 | ⚡ **Real-time streaming** | Speech starts on the first sentence while the LLM is still writing the rest — no waiting for a full reply. |
-| ✋ **True barge-in** | Talk over it and it actually stops: the LLM request is cancelled and queued audio is dropped, not just muted. |
+| ✋ **True barge-in** | Talk over it and it actually stops: the LLM request is cancelled and queued audio is dropped, not just muted. A quick *"yeah"* or *"mhm"* doesn't count — it keeps talking, like a person would. |
+| 👂 **Natural turn-taking** | If you pause mid-sentence (*"I just hit the…"*) it waits for the rest instead of jumping in. |
 | 🔁 **Natural resume** | After an interruption, a quick *"sorry, go on"* makes it continue the cut-off thought; a new question changes topic. |
 | 🧬 **Voice cloning** | Give it 5–15 seconds of any voice (yours, with consent) and it speaks in that voice — with natural `<laugh>`s and `<sigh>`s. |
 | 🧠 **Any brain** | Local & free with **Ollama**, free-tier **Google Gemini**, **OpenAI**, OpenRouter, Groq, or your own GGUF via llama.cpp. |
@@ -41,7 +42,7 @@ say *"go on"*. One double-click to install, no Python setup required.
 | 🛠️ **Tools** | Timers, reminders, calculator, notes, date/time — called by the model mid-conversation. |
 | 💬 **Live transcript** | A chat window that writes each word as it's heard, so you can read along. |
 | 🎭 **Personas** | 10 built-in personalities (coach, mentor, storyteller, devil's advocate, …) — or write your own in a text file. |
-| 🗣️ **AI-led mode** | Optionally the assistant greets you first and keeps the conversation going when you go quiet. |
+| 🗣️ **AI-led mode** | Optionally the assistant greets you first and keeps the conversation going when you go quiet — and backs off when you're busy or ignore it. |
 | 🧍 **3D avatar** *(optional)* | Streams audio, emotions and gestures to an Unreal Engine MetaHuman with Audio2Face lip sync. |
 
 ## 🚀 Quick start
@@ -270,7 +271,7 @@ uv pip install torch==2.7.1 torchaudio==2.7.1 -r requirements.txt `
 python -m pytest
 ```
 
-The test suite (130+ tests) runs without a GPU, audio device, or LLM server and
+The test suite (200+ tests) runs without a GPU, audio device, or LLM server and
 covers the parts that are easy to get subtly wrong in a streaming system:
 barge-in and stale-audio rejection, retry safety, resume, transcript pacing,
 memory, tools, and config resolution.

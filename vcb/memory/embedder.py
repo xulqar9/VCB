@@ -8,9 +8,13 @@ import numpy as np
 
 
 class Embedder:
-    def __init__(self, model_name: str, query_instruction: str = "") -> None:
+    def __init__(self, model_name: str, query_instruction: str = "",
+                 cache_dir: str | None = None) -> None:
         self._model_name = model_name
         self._query_instruction = query_instruction
+        # fastembed's default cache is in the OS temp folder, which Windows
+        # cleans -- the model would be re-downloaded every so often.
+        self._cache_dir = cache_dir
         self._model = None  # lazy: fastembed fetches weights on first load()
 
     def load(self) -> None:
@@ -21,6 +25,7 @@ class Embedder:
         self._model = TextEmbedding(
             model_name=self._model_name,
             providers=["CPUExecutionProvider"],
+            cache_dir=self._cache_dir,
         )
 
     def embed(self, texts: list[str]) -> np.ndarray:

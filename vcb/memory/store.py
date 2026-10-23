@@ -205,6 +205,16 @@ class MemoryStore:
             ).fetchall()
         return "\n".join(f"- {k}: {v}" for k, v in rows)
 
+    def facts(self) -> dict[str, str]:
+        with self._lock:
+            rows = self._db.execute("SELECT key, value FROM facts ORDER BY key").fetchall()
+        return dict(rows)
+
+    def delete_fact(self, key: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM facts WHERE key = ?", (key,))
+            self._db.commit()
+
     def get_fact(self, key: str) -> str | None:
         with self._lock:
             row = self._db.execute(

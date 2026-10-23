@@ -29,6 +29,15 @@ class ConversationManager:
                 return msg["content"]
         return None
 
+    def unreplied_count(self) -> int:
+        """Assistant messages since the user last spoke."""
+        n = 0
+        for msg in reversed(self._history):
+            if msg["role"] != "assistant":
+                break
+            n += 1
+        return n
+
     def messages(self, resume_hint: str | None = None,
                  memory_block: str | None = None,
                  tools_block: str | None = None) -> list[dict[str, str]]:

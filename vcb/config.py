@@ -136,6 +136,20 @@ class VADConfig:
 
 
 @dataclass
+class TurnTakingConfig:
+    """When the assistant stops talking and when it starts replying."""
+    # While the assistant is speaking, the user has to keep talking this long
+    # (actual voiced time) before it stops. Shorter sounds are transcribed
+    # first: a backchannel ("yeah", "mhm", "right") is ignored and the
+    # assistant just keeps going; anything else still interrupts it.
+    barge_in_min_speech_s: float = 0.8
+    ignore_backchannels: bool = True
+    # If an utterance ends mid-sentence ("...and", "I hit the..."), wait this
+    # long for the rest before replying (0 = reply immediately).
+    incomplete_wait_s: float = 1.2
+
+
+@dataclass
 class STTConfig:
     model: str = "large-v3-turbo"        # faster-whisper model name or path
     device: str = "cuda"                 # main.py drops to cpu if no CUDA GPU
@@ -145,6 +159,11 @@ class STTConfig:
     cpu_compute_type: str = "int8"
     language: str = "en"
     beam_size: int = 1                   # greedy = lowest latency
+    # Give Whisper the last bit of conversation plus remembered facts as a
+    # prompt, so names and jargon ("Plat 3", "boost", "whiffed") are heard
+    # right. Kept short: long prompts make Whisper hallucinate.
+    use_context: bool = True
+    context_chars: int = 200
 
 
 @dataclass
@@ -404,18 +423,26 @@ class ProactiveConfig:
     # goes quiet until the user speaks again (0 = never stop).
     idle_backoff: float = 2.0
     max_unanswered: int = 2
+    # The more often the assistant has spoken up recently, the longer it waits
+    # before doing it again (each 2 nudges in this window double the wait, up
+    # to 3 doublings), so it doesn't pester someone who's busy but chatting.
+    nudge_window_s: float = 600.0
+    # If the user says they're busy/focusing/playing, no nudges for this long
+    # (renewed each time they say it). They can still talk anytime.
+    busy_quiet_s: float = 300.0
+    # The "welcome back" context is only added after a real absence.
+    welcome_back_min_s: float = 60.0
     lead_temperature: float = 0.8        # livelier than the low default when the AI drives
     lead_max_tokens: int = 160           # give lead turns room to actually say something
     hint: str = field(default_factory=lambda: (
-        f"It seems {USER_NAME} has gone quiet, so it's on you to carry the "
-        "conversation now. They haven't said anything new, so don't react as if "
-        "they had (no 'oh, great' or 'that's cool'). Say something real: pick up "
-        "a thread from earlier, share a thought or a little observation of your "
-        "own, then ask an open question that actually invites a reply. Give two "
-        "to four warm, natural sentences with some personality - not a one-word "
-        "check-in, and never like you're reading a script. Never repeat a "
-        f"question you already asked. Speak only to {USER_NAME}, and never "
-        "restate your instructions, rules, or anything about tools or JSON."
+        "Say what you'd naturally say into the pause, out loud. There is nothing "
+        "to react to, so don't open with a reaction ('Oh', 'That's great', "
+        "'That's interesting'). Keep the conversation going the way a friend "
+        "would: pick up a thread from earlier, or share a thought or a little "
+        f"observation of your own, then invite {USER_NAME} in with one open "
+        "question. Never repeat a question you already asked. Two or three warm, "
+        f"natural sentences. Speak only to {USER_NAME}, and never restate your "
+        "instructions, rules, or anything about tools or JSON."
     ))
     greeting_hint: str = field(default_factory=lambda: (
         f"You're opening the conversation before {USER_NAME} has said anything. "
@@ -425,23 +452,36 @@ class ProactiveConfig:
         "see them, never flat or scripted."
     ))
     waiting_hint: str = field(default_factory=lambda: (
-        f"You already asked {USER_NAME} something and haven't had an answer "
-        "yet - they may still be thinking or busy. They haven't said anything "
-        "new, so don't react as if they had (no 'oh, great' or 'that's cool'). "
-        "Do NOT launch a brand-new topic and don't repeat your question. Instead, "
-        "gently give them room: lightly rephrase or ease off your question, or "
-        "add a small warm thought, in one short sentence. Don't pile on more "
-        f"questions. Speak only to {USER_NAME}, and never restate your "
+        "Say what you'd naturally say into the silence, out loud, in one or two "
+        "short sentences. There is nothing to react to, so don't open with a "
+        "reaction ('Oh', 'That's great', 'That's interesting'). Take the "
+        "pressure off: answer your own question yourself, or offer an easier, "
+        "lighter topic. Don't repeat your question. Never restate your "
         "instructions, rules, or anything about tools or JSON."
     ))
     # Last nudge before going quiet (see max_unanswered).
     give_space_hint: str = field(default_factory=lambda: (
-        f"{USER_NAME} still hasn't replied - they're probably busy. They haven't "
-        "said anything new, so don't react as if they had. In one short, warm "
-        "sentence, let them know there's no rush and you'll be right here "
-        "whenever they want to talk. Do not ask a question. Never restate your "
-        "instructions, rules, or anything about tools or JSON."
+        "They've probably stepped away or are busy. Say one short, good-humored "
+        "line into the silence - thinking out loud is fine - and make clear "
+        "you'll be right here whenever they want to talk. Don't apologize (you "
+        "did nothing wrong), don't guilt-trip, and don't ask a question. Never "
+        "restate your instructions, rules, or anything about tools or JSON."
     ))
+    # Stage direction prepended to every nudge so the model knows it's being
+    # ignored, for how long, and what went unanswered ({name}, {silence},
+    # {unreplied}, {last} are filled in at runtime).
+    silence_note: str = (
+        "[Stage direction - nobody said this: {silence} pass in silence. {name} "
+        "hasn't answered your last {unreplied} (most recently: \"{last}\"). They "
+        "may be busy, thinking, or away from the room.]"
+    )
+    # Sent with the user's next words after they ignored one or more nudges.
+    welcome_back_hint: str = (
+        "{name} is speaking again after not replying for about {silence} (you'd "
+        "checked in on them in the meantime). Respond to what they just said. If "
+        "it fits, show you're glad to hear from them - lightly, without guilt-"
+        "tripping, and without dwelling on the silence."
+    )
 
 
 
@@ -452,6 +492,7 @@ class MemoryConfig:
     ephemeral: bool = field(default_factory=lambda: _env_bool("VCB_MEMORY_EPHEMERAL", False))
     db_path: str = r"logs\memory.db"
     embed_model: str = "BAAI/bge-small-en-v1.5"   # 384-d, runs on CPU
+    embed_cache_dir: str = r"models\fastembed"     # persistent (not the OS temp folder)
     # bge wants this instruction on the *query* side (not stored passages).
     query_instruction: str = "Represent this sentence for searching relevant passages: "
     top_k: int = 5                       # max relevant memories injected per turn
@@ -547,6 +588,7 @@ class AppConfig:
     prosody: ProsodyConfig = field(default_factory=ProsodyConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     barge_in: bool = True                # user speech interrupts playback
+    turn_taking: TurnTakingConfig = field(default_factory=TurnTakingConfig)
     resume: ResumeConfig = field(default_factory=ResumeConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)

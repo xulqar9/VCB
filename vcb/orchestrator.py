@@ -19,6 +19,7 @@ one crashes, so a single unexpected error can't end the session.
 """
 
 import asyncio
+import collections
 import contextlib
 import logging
 import re
@@ -30,7 +31,7 @@ from .audio import MicCapture, SpeakerPlayback
 from .audiofx import apply_gain_limit, silence, trailing_pause_seconds
 from .avatar import AvatarBridge
 from .chunker import SentenceChunker
-from .config import USER_NAME, AppConfig
+from .config import USER_NAME, AppConfig, resolve_path
 from .conversation import ConversationManager
 from .llm.base import LLMConfigError, LLMEngine
 from .memory import Embedder, MemoryStore, consolidate
@@ -50,6 +51,7 @@ from .skills import (
 )
 from .state import Phase, PipelineSnapshot
 from .transcript import Transcript, WordPacer
+from .turns import is_backchannel, looks_incomplete, mentions_busy
 from .stt.base import STTEngine
 from .tts.base import TTSEngine
 from .vad import SpeechEnd, SpeechStart, VADEvent, VADSegmenter
@@ -84,12 +86,43 @@ _ECHO_MARKERS = (
     "do not mention them",
     "use the tools",
     "speaker label",
+    "stage direction",
+    "nobody said this",
 )
 
 
 def _is_instruction_echo(text: str) -> bool:
     low = text.lower()
     return any(marker in low for marker in _ECHO_MARKERS)
+
+
+# A reply-to-nothing opener ("Oh, I get it.", "That's great to hear!", "Oh,")
+# at the start of an AI-led nudge. Small models add these even when told the
+# user said nothing; they make the assistant sound like it misheard silence.
+# The reaction must end at punctuation, so "That's great to see you..." stays.
+_REACTION_SENTENCE = re.compile(
+    r"^(?:(?:oh|ah|aw|well)[,!.]?\s+)?"
+    r"(?:(?:that'?s|that is|sounds|it'?s)\s+(?:so\s+|really\s+)?"
+    r"(?:great|good|cool|interesting|nice|awesome|fair|fine|okay|ok|wonderful|lovely)"
+    r"(?:\s+to\s+hear)?"
+    r"|i\s+(?:see|get\s+it|get\s+that|hear\s+you|understand)|gotcha|got\s+it)"
+    r"(?:[!.,]+\s*|\s*$)",
+    re.IGNORECASE,
+)
+_REACTION_INTERJECTION = re.compile(r"^(?:oh|ah|aw)\s*[,!.]\s*", re.IGNORECASE)
+_LEADING_QUOTE = re.compile(r"^(\s*[\"'“‘]?\s*)(.*)$", re.S)
+
+
+def strip_reaction_opener(text: str) -> str:
+    """Remove a leading reaction from an AI-led line; '' if nothing remains."""
+    quote, body = _LEADING_QUOTE.match(text).groups()
+    out = _REACTION_SENTENCE.sub("", body, count=1)
+    out = _REACTION_INTERJECTION.sub("", out, count=1).strip()
+    if out == body.strip():
+        return text.strip()
+    if not out.strip("\"'”’ "):
+        return ""                            # only the reaction (and a quote) was there
+    return quote.strip() + out[0].upper() + out[1:]
 
 
 _NAME_RE = re.compile(r"\s*You are ([A-Z][a-zA-Z]+)")
@@ -99,6 +132,15 @@ def speaker_name(system_prompt: str) -> str:
     """Pull the persona's spoken name out of its prompt ("You are Iris, ...")."""
     m = _NAME_RE.match(system_prompt or "")
     return m.group(1) if m else "Assistant"
+
+
+def _spoken_duration(seconds: float) -> str:
+    """'25 seconds', 'about a minute', '3 minutes' -- how a person would say it."""
+    s = max(1, int(round(seconds)))
+    if s < 60:
+        return f"{s} seconds"
+    minutes = round(s / 60)
+    return "about a minute" if minutes <= 1 else f"{minutes} minutes"
 
 
 class Orchestrator:
@@ -154,6 +196,16 @@ class Orchestrator:
         self._last_activity = time.monotonic()  # for AI-led idle detection
         # AI-led turns in a row the user hasn't answered (reset when they speak).
         self._unanswered_leads = 0
+        self._nudge_times: collections.deque[float] = collections.deque(maxlen=50)
+        self._quiet_until = 0.0                   # no AI-led nudges before this
+        # Talking over the assistant: the task that decides whether it's a
+        # real interruption (see _confirm_barge_in), and the transcription
+        # check for short sounds (see _check_overlap).
+        self._overlap_task: asyncio.Task | None = None
+        self._side_task: asyncio.Task | None = None
+        self._stt_vocab = ""                      # remembered names/jargon for STT
+        self._strip_reaction = False              # see _speak_reply(unprompted=)
+        self._last_user_spoke = time.monotonic()  # for "silent for N s" in nudges
         self._user_speaking = False        # mic is mid-utterance right now
         self._session_id = time.strftime("%Y%m%d-%H%M%S")
         self._memory: MemoryStore | None = None
@@ -161,7 +213,8 @@ class Orchestrator:
         if cfg.memory.enabled:
             self._memory = MemoryStore(cfg.memory.db_path, cfg.memory.ephemeral,
                                        cfg.memory.max_index_rows)
-            self._embedder = Embedder(cfg.memory.embed_model, cfg.memory.query_instruction)
+            self._embedder = Embedder(cfg.memory.embed_model, cfg.memory.query_instruction,
+                                      resolve_path(cfg.memory.embed_cache_dir))
         self._consolidating = False
         self._consolidate_task: asyncio.Task | None = None
         self._shutdown_done = False
@@ -179,6 +232,7 @@ class Orchestrator:
         )
         if self._embedder is not None:
             await asyncio.to_thread(self._embedder.load)  # warm the embedder (CPU)
+        await self._refresh_stt_vocab()
         # Playback must match whatever rate the chosen TTS engine produces.
         self.cfg.audio.output_sample_rate = self.tts.sample_rate
         await self.mic.start()
@@ -200,6 +254,7 @@ class Orchestrator:
             for name, fn, on_crash in loops
         ]
         log.info("ready - start talking")
+        self._last_user_spoke = time.monotonic()
         if self.cfg.proactive.enabled and self.cfg.proactive.greet_on_start:
             self._last_activity = time.monotonic()
             self._start_lead_turn(greeting=True)
@@ -213,6 +268,8 @@ class Orchestrator:
             return
         self._shutdown_done = True
         await self._cancel_turn()
+        if self._side_task is not None:
+            self._side_task.cancel()
         for t in self._tasks:
             t.cancel()
         for t in self._tasks:
@@ -306,14 +363,30 @@ class Orchestrator:
         if isinstance(event, SpeechStart):
             self._user_speaking = True
             self._last_activity = time.monotonic()
-            if self.avatar is not None:
-                self.avatar.state("listening")
-            if self.cfg.barge_in and self._snapshot().assistant_active:
+            snap = self._snapshot()
+            if self.cfg.barge_in and snap.assistant_active:
+                speaking = snap.audio_playing or snap.avatar_speaking
+                if speaking and self.cfg.turn_taking.barge_in_min_speech_s > 0:
+                    # Talking over the assistant: keep going until it's clear
+                    # this is more than a quick "yeah" (see _confirm_barge_in).
+                    self._overlap_task = asyncio.create_task(
+                        self._confirm_barge_in(), name="barge-in-check")
+                    return
                 log.info("barge-in: interrupting")
                 await self._cancel_turn()
+            if self.avatar is not None:
+                self.avatar.state("listening")
         elif isinstance(event, SpeechEnd):
             self._user_speaking = False
             self._last_activity = time.monotonic()
+            overlap, self._overlap_task = self._overlap_task, None
+            if overlap is not None and not overlap.done():
+                # A short sound while the assistant talked: what was said
+                # decides whether it stops (see _check_overlap).
+                overlap.cancel()
+                self._side_task = asyncio.create_task(
+                    self._check_overlap(event.audio), name="overlap-check")
+                return
             await self._cancel_turn()
             if self.avatar is not None:
                 self.avatar.state("thinking")
@@ -322,6 +395,48 @@ class Orchestrator:
             self._turn_task = asyncio.create_task(
                 self._run_turn(event.audio), name="turn"
             )
+
+    async def _confirm_barge_in(self) -> None:
+        """While the user talks over the assistant, interrupt only once they've
+        been speaking long enough to mean it. A short sound ends first and goes
+        to _check_overlap instead."""
+        need = self.cfg.turn_taking.barge_in_min_speech_s
+        while self._user_speaking:
+            if self.vad.voiced_s >= need:
+                self._overlap_task = None         # don't let _cancel_turn cancel us
+                log.info("barge-in: interrupting")
+                await self._cancel_turn()
+                if self.avatar is not None:
+                    self.avatar.state("listening")
+                return
+            await asyncio.sleep(0.03)
+
+    async def _check_overlap(self, audio) -> None:
+        """A short utterance said while the assistant was talking. A
+        backchannel ("yeah", "mhm") is ignored and the assistant carries on;
+        anything else ("wait", "no, stop") interrupts it and gets a reply."""
+        try:
+            text = await self.stt.transcribe(
+                audio, self.cfg.audio.input_sample_rate, self._stt_context())
+        except Exception:
+            log.exception("transcription failed")
+            return
+        if not text:
+            return
+        if self.cfg.turn_taking.ignore_backchannels and is_backchannel(text):
+            log.info("backchannel while speaking, carrying on: %r", text)
+            return
+        log.info("barge-in: interrupting (%r)", text)
+        await self._cancel_turn()
+        returning = self._accept_user_text(text)
+        if self._user_speaking:
+            return            # they kept going; their next words join this message
+        if self.avatar is not None:
+            self.avatar.state("thinking")
+        self._metrics = TurnMetrics()
+        self._metrics.mark("t_speech_end")
+        self._turn_task = asyncio.create_task(
+            self._run_turn(None, text=text, returning=returning), name="turn")
 
     async def _idle_loop(self) -> None:
         """AI-led mode: when nobody's talking and no reply is in flight, wait
@@ -343,11 +458,40 @@ class Orchestrator:
 
     def _lead_wait(self) -> float | None:
         """Silence (s) before the next AI-led nudge; None = stay quiet until
-        the user speaks."""
+        the user speaks (or their "I'm busy" quiet period ends)."""
         p = self.cfg.proactive
+        now = time.monotonic()
+        if now < self._quiet_until:
+            return None
         if p.max_unanswered and self._unanswered_leads >= p.max_unanswered:
             return None
-        return p.idle_seconds * (p.idle_backoff ** self._unanswered_leads)
+        recent = sum(1 for t in self._nudge_times if now - t <= p.nudge_window_s)
+        pressure = min(3, recent // 2)
+        return p.idle_seconds * (p.idle_backoff ** (self._unanswered_leads + pressure))
+
+    def _user_label(self) -> str:
+        return USER_NAME[:1].upper() + USER_NAME[1:]
+
+    def _silence_note(self) -> str:
+        """What the model needs to know to react to being ignored naturally:
+        how long the user has been silent and how much went unanswered."""
+        n = self.convo.unreplied_count()
+        return self.cfg.proactive.silence_note.format(
+            name=self._user_label(),
+            silence=_spoken_duration(time.monotonic() - self._last_user_spoke),
+            unreplied="message" if n <= 1 else f"{n} messages",
+            last=strip_speech_tags(self.convo.last_assistant() or "").strip(),
+        )
+
+    def _welcome_back_note(self) -> str | None:
+        """Context for the reply when the user speaks after ignoring nudges
+        for a while (not after a short pause)."""
+        silence = time.monotonic() - self._last_user_spoke
+        if self._unanswered_leads == 0 or silence < self.cfg.proactive.welcome_back_min_s:
+            return None
+        return self.cfg.proactive.welcome_back_hint.format(
+            name=self._user_label(), silence=_spoken_duration(silence),
+        )
 
     async def _tts_loop(self) -> None:
         prosody = self.cfg.prosody
@@ -492,6 +636,10 @@ class Orchestrator:
         return self._turn_task is not None and not self._turn_task.done()
 
     async def _cancel_turn(self) -> None:
+        # Nothing left to talk over: stop deciding whether to interrupt.
+        if self._overlap_task is not None:
+            self._overlap_task.cancel()
+            self._overlap_task = None
         if self._metrics is not None and self._turn_active():
             self._metrics.interrupted = True
         self._turn_gen += 1                # supersede any in-flight STT/turn work
@@ -514,26 +662,37 @@ class Orchestrator:
             self.avatar.interrupt()
             self._avatar_speaking = False
 
-    async def _run_turn(self, audio) -> None:
+    async def _run_turn(self, audio, text: str | None = None,
+                        returning: str | None = None) -> None:
+        """Reply to one user utterance. With text=None the audio is
+        transcribed first; otherwise the text was already transcribed and
+        recorded by the caller (see _check_overlap)."""
         m = self._metrics
         turn_gen = self._turn_gen
         try:
-            text = await self.stt.transcribe(audio, self.cfg.audio.input_sample_rate)
-            # STT ran in an uncancellable worker thread; if a barge-in superseded
-            # this turn while it ran, drop the now-obsolete transcript.
-            if turn_gen != self._turn_gen:
-                log.debug("transcript superseded by barge-in, discarding")
-                return
-            if m:
-                m.mark("t_stt_done")
-            if not text:
-                log.debug("empty transcript, ignoring")
-                return
-            self._unanswered_leads = 0          # they answered: AI-led may nudge again
-            log.info("user: %s", text)
-            self._transcript.user(text)
-            self.convo.add_user(text)
+            if text is None:
+                text = await self.stt.transcribe(
+                    audio, self.cfg.audio.input_sample_rate, self._stt_context())
+                # STT ran in an uncancellable worker thread; if a barge-in
+                # superseded this turn while it ran, drop the obsolete transcript.
+                if turn_gen != self._turn_gen:
+                    log.debug("transcript superseded by barge-in, discarding")
+                    return
+                if m:
+                    m.mark("t_stt_done")
+                if not text:
+                    log.debug("empty transcript, ignoring")
+                    return
+                returning = self._accept_user_text(text)
             memory_block = await self._remember_user(text)
+
+            # Sounds like they stopped mid-sentence: give them a moment to
+            # finish. If they do, this turn is cancelled and their next words
+            # join this message (ConversationManager.add_user).
+            wait = self.cfg.turn_taking.incomplete_wait_s
+            if wait > 0 and looks_incomplete(text):
+                log.debug("sounds unfinished, waiting %.1fs for more", wait)
+                await asyncio.sleep(wait)
 
             # If we were cut off, keep the thought resumable across a few turns:
             # a brief backchannel shouldn't burn it, so it stays armed until the
@@ -548,6 +707,8 @@ class Orchestrator:
                     log.info("resume armed (%d turns left)", self._resume_budget)
                 else:
                     self._resume_pending = False   # window expired without a resume
+            if returning:
+                hint = f"{hint}\n\n{returning}" if hint else returning
 
             messages = self.convo.messages(hint, memory_block, self._tools_block)
             await self._speak_reply(messages, m, resuming=resuming)
@@ -555,6 +716,49 @@ class Orchestrator:
             raise
         except Exception:
             log.exception("turn failed")
+
+    def _accept_user_text(self, text: str) -> str | None:
+        """Record what the user said (history, transcript, AI-led state).
+        Returns the welcome-back note if they're returning after an absence."""
+        now = time.monotonic()
+        returning = self._welcome_back_note()
+        self._unanswered_leads = 0          # they answered: AI-led may nudge again
+        self._last_user_spoke = now
+        if mentions_busy(text):
+            self._quiet_until = now + self.cfg.proactive.busy_quiet_s
+            log.info("user sounds busy: no check-ins for %.0fs",
+                     self.cfg.proactive.busy_quiet_s)
+        log.info("user: %s", text)
+        self._transcript.user(text)
+        self.convo.add_user(text)
+        return returning
+
+    def _stt_context(self) -> str | None:
+        """Prompt for speech recognition: remembered names/jargon plus the end
+        of the assistant's last line (what the user is most likely answering)."""
+        sc = self.cfg.stt
+        if not sc.use_context:
+            return None
+        vocab = self._stt_vocab[: sc.context_chars // 2]
+        last = strip_speech_tags(self.convo.last_assistant() or "").strip()
+        room = sc.context_chars - len(vocab) - 1
+        if room > 0 and len(last) > room:
+            last = last[-room:].split(" ", 1)[-1]     # start on a word boundary
+        ctx = " ".join(p for p in (vocab, last if room > 0 else "") if p)
+        return ctx or None
+
+    async def _refresh_stt_vocab(self) -> None:
+        """Short remembered fact values ("Rocket League", "Diamond") help
+        speech recognition spell names and jargon right."""
+        if self._memory is None or not self.cfg.stt.use_context:
+            return
+        try:
+            facts = await asyncio.to_thread(self._memory.facts)
+        except Exception:
+            log.exception("couldn't read facts for speech recognition")
+            return
+        values = sorted({v.strip() for v in facts.values() if 0 < len(v.strip()) <= 30})
+        self._stt_vocab = ", ".join(values)
 
     def _start_lead_turn(self, greeting: bool) -> None:
         """AI-led turn: the assistant speaks without any user input. Skipped if
@@ -579,6 +783,9 @@ class Orchestrator:
             waiting = bool(last and last.rstrip().endswith("?"))
             cue = p.waiting_hint if waiting else p.hint
         self._unanswered_leads += 1
+        if not greeting:
+            self._nudge_times.append(time.monotonic())
+            cue = f"{self._silence_note()}\n{cue}"
         # Deliver the nudge as a USER turn, not a trailing system message: this
         # model responds to user turns but tends to parrot trailing system text.
         # No tools_block: a lead turn is for chit-chat, not for firing tools
@@ -587,7 +794,8 @@ class Orchestrator:
         messages.append({"role": "user", "content": cue})
         self._turn_task = asyncio.create_task(
             self._speak_reply(messages, m, temperature=p.lead_temperature,
-                              max_tokens=p.lead_max_tokens),
+                              max_tokens=p.lead_max_tokens,
+                              unprompted=not greeting),
             name="lead-turn",
         )
 
@@ -595,13 +803,16 @@ class Orchestrator:
                            m: TurnMetrics | None,
                            temperature: float | None = None,
                            max_tokens: int | None = None,
-                           resuming: bool = False) -> None:
+                           resuming: bool = False,
+                           unprompted: bool = False) -> None:
         """Stream the model's reply, speak it, and record it. Shared by
         user-driven and AI-led turns; barge-in cancellation records the
-        partial so the resume feature can pick it back up."""
+        partial so the resume feature can pick it back up. unprompted=True
+        (AI-led nudges) drops a leading reaction like "Oh, that's great!"."""
         parts: list[str] = []
         self._spoken = []
         self._reply_drained.clear()
+        self._strip_reaction = unprompted
         try:
             try:
                 await self._stream_reply(messages, m, parts,
@@ -760,6 +971,14 @@ class Orchestrator:
         spoken = sanitize_for_speech(chunk, self.tts.supports_tags)
         if not spoken or _is_instruction_echo(spoken):
             return ""
+        if self._strip_reaction:
+            # Leading emotion tags (<chuckle>) stay; only the words are checked.
+            tags, words = re.match(r"^((?:<[^>]+>\s*)*)(.*)$", spoken, re.S).groups()
+            words = strip_reaction_opener(words)
+            if not words:
+                return ""                   # the whole chunk was a reaction
+            spoken = f"{tags}{words}"
+            self._strip_reaction = False    # only the opening is checked
         if m and not m.t_first_chunk:
             m.mark("t_first_chunk")
         await self._enqueue_tts(spoken, m)
@@ -835,15 +1054,19 @@ class Orchestrator:
             if not turns:
                 return
             prev = await asyncio.to_thread(self._memory.latest_summary)
-            summary, facts = await consolidate(self.llm, prev, turns)
+            existing = await asyncio.to_thread(self._memory.facts)
+            summary, facts, remove = await consolidate(self.llm, prev, turns, existing)
             if summary:
                 await asyncio.to_thread(
                     self._memory.add_summary, summary, turns[0][0], turns[-1][0]
                 )
             for key, value in facts.items():
                 await asyncio.to_thread(self._memory.upsert_fact, key, value)
-            log.info("memory consolidated: %d turns -> summary=%s, +%d facts",
-                     len(turns), bool(summary), len(facts))
+            for key in remove:
+                await asyncio.to_thread(self._memory.delete_fact, key)
+            await self._refresh_stt_vocab()
+            log.info("memory consolidated: %d turns -> summary=%s, +%d facts, -%d",
+                     len(turns), bool(summary), len(facts), len(remove))
         except Exception:
             log.exception("consolidation failed")
         finally:

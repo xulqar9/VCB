@@ -15,7 +15,8 @@ class _FakeSTT:
     async def load(self):
         pass
 
-    async def transcribe(self, audio, sample_rate):
+    async def transcribe(self, audio, sample_rate, context=None):
+        self.contexts = getattr(self, "contexts", []) + [context]
         return self._transcript
 
     async def close(self):
@@ -430,8 +431,61 @@ def test_ai_led_backs_off_then_goes_quiet_when_ignored():
     assert orch._lead_wait() == p.idle_seconds
     cues = _lead_cues(orch, greeting_first=True, nudges=5)
     # Greeting, then one "no rush" line, then silence -- not endless questions.
-    assert cues == [p.greeting_hint, p.give_space_hint]
+    assert len(cues) == 2
+    assert cues[0] == p.greeting_hint
+    assert cues[1].endswith(p.give_space_hint)
     assert orch._lead_wait() is None
+
+
+def test_nudge_tells_model_it_was_ignored():
+    import time
+
+    orch = _orch(_FakeLLM([]))
+    orch.convo.add_user("hi")
+    orch.convo.add_assistant("What do you do for fun?")
+    orch.convo.add_assistant("I like hiking, personally.")
+    orch._last_user_spoke = time.monotonic() - 42
+    note = orch._silence_note()
+    assert "42 seconds pass in silence" in note
+    assert "your last 2 messages" in note
+    assert '"I like hiking, personally."' in note        # quotes what went unanswered
+    orch._last_user_spoke = time.monotonic() - 150
+    assert "3 minutes" in orch._silence_note() or "2 minutes" in orch._silence_note()
+
+
+def test_welcome_back_note_only_after_ignored_nudges():
+    import time
+
+    orch = _orch(_FakeLLM([]))
+    assert orch._welcome_back_note() is None          # normal turn: no note
+    orch._unanswered_leads = 2
+    orch._last_user_spoke = time.monotonic() - 95
+    note = orch._welcome_back_note()
+    assert "about 2 minutes" in note or "about a minute" in note
+    assert "speaking again" in note
+
+
+def test_welcome_back_note_reaches_the_model():
+    import time
+
+    async def _run():
+        orch = _orch(_FakeLLM(["Hey, welcome back!"]))
+        seen = []
+        real = orch.convo.messages
+
+        def _spy(hint=None, *a, **kw):
+            seen.append(hint)
+            return real(hint, *a, **kw)
+
+        orch.convo.messages = _spy
+        orch._unanswered_leads = 2
+        orch._last_user_spoke = time.monotonic() - 70
+        await _drive_turn(orch, "Sorry, I was making coffee.")
+        return seen, orch
+
+    seen, orch = asyncio.run(_run())
+    assert seen and seen[-1] and "speaking again" in seen[-1]
+    assert orch._unanswered_leads == 0
 
 
 def test_ai_led_without_greeting_nudges_then_gives_space():
@@ -455,7 +509,9 @@ def test_ai_led_without_greeting_nudges_then_gives_space():
 
     waits = asyncio.run(_run())
     assert waits == [p.idle_seconds, p.idle_seconds * p.idle_backoff]   # 10 s, then 20 s
-    assert cues == [p.hint, p.give_space_hint]
+    assert len(cues) == 2
+    assert cues[0].startswith("[Stage direction") and cues[0].endswith(p.hint)
+    assert cues[1].endswith(p.give_space_hint)
 
 
 def test_user_reply_rearms_ai_led():
@@ -469,3 +525,46 @@ def test_user_reply_rearms_ai_led():
     orch = asyncio.run(_run())
     assert orch._unanswered_leads == 0
     assert orch._lead_wait() == orch.cfg.proactive.idle_seconds
+
+def test_strip_reaction_opener():
+    from vcb.orchestrator import strip_reaction_opener as s
+
+    # Real outputs from mistral-nemo after being ignored:
+    assert s("That's great to hear! So, what kind of projects?") == "So, what kind of projects?"
+    assert s("Oh, I get it. No big plans then.") == "No big plans then."
+    assert s("Oh, that's interesting! What's that project about?") == "What's that project about?"
+    assert s("Oh, sorry, I guess you stepped away.") == "Sorry, I guess you stepped away."
+    assert s("Oh, I get it.") == ""                       # nothing left -> drop chunk
+    # Natural openers are kept.
+    assert s("Hmm, maybe that was a big question.") == "Hmm, maybe that was a big question."
+    assert s("No pressure, by the way.") == "No pressure, by the way."
+    assert s("Well, I've been reading a lot lately.") == "Well, I've been reading a lot lately."
+    assert s("I see you're busy, no worries!") == "You're busy, no worries!" or \
+        s("I see you're busy, no worries!") == "I see you're busy, no worries!"
+
+
+def test_nudge_drops_reaction_but_normal_reply_keeps_it():
+    async def _run(unprompted):
+        orch = _orch(_FakeLLM(["Oh, that's great to hear! ", "What else is new?"]))
+        task = asyncio.create_task(orch._speak_reply(
+            [{"role": "user", "content": "x"}], None, unprompted=unprompted))
+        await asyncio.sleep(0.05)
+        orch._reply_drained.set()
+        await task
+        return orch.convo.last_assistant(), [i.text for i in _drain(orch) if i is not _SENTINEL]
+
+    said, chunks = asyncio.run(_run(unprompted=True))
+    assert said == "What else is new?"
+    assert all("great to hear" not in c for c in chunks)
+
+    said, _ = asyncio.run(_run(unprompted=False))         # a real answer to the user
+    assert said.startswith("Oh, that's great to hear!")
+
+def test_strip_reaction_opener_edge_cases():
+    from vcb.orchestrator import strip_reaction_opener as s
+
+    # Not a stand-alone reaction: keep the whole sentence intact.
+    assert s("That's great to see you've been busy.") == "That's great to see you've been busy."
+    # Quoted lines (models sometimes wrap speech in quotes).
+    assert s('"Oh, hey, by the way, I\'m Iris."') == '"Hey, by the way, I\'m Iris."'
+    assert s('"Oh, I get it." ') == ""
