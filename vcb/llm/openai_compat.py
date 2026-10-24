@@ -4,15 +4,24 @@ generation. Transient failures retry with backoff, but only until the first
 token is streamed -- retrying after that would re-speak the reply's start."""
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator
 
 import openai
 
 from ..config import LLMConfig
-from .base import LLMConfigError, LLMEngine
+from .base import LLMConfigError, LLMEngine, ToolCallRequest
 
 log = logging.getLogger("vcb.llm")
+
+
+def _parse_args(raw: str) -> dict:
+    try:
+        value = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _error_code(exc: "openai.APIStatusError") -> str:
@@ -85,9 +94,10 @@ class OpenAICompatLLM(LLMEngine):
         )
         log.info("LLM client -> %s (model=%s)", self.cfg.base_url, self.cfg.model)
 
-    async def stream(self, messages: list[dict[str, str]],
+    async def stream(self, messages: list[dict],
                      temperature: float | None = None,
-                     max_tokens: int | None = None) -> AsyncIterator[str]:
+                     max_tokens: int | None = None,
+                     tools: list[dict] | None = None) -> AsyncIterator["str | ToolCallRequest"]:
         assert self._client is not None, "call load() first"
         attempt = 0
         while True:
@@ -109,11 +119,38 @@ class OpenAICompatLLM(LLMEngine):
                     kwargs["presence_penalty"] = self.cfg.presence_penalty
                 if self.cfg.reasoning_effort:
                     kwargs["reasoning_effort"] = self.cfg.reasoning_effort
+                if tools:
+                    kwargs["tools"] = tools
                 response = await self._client.chat.completions.create(**kwargs)
+                # Tool calls stream in pieces (by index): id/name first, then
+                # the JSON arguments in fragments.
+                pending: dict[int, dict] = {}
                 async for event in response:
-                    if event.choices and event.choices[0].delta.content:
+                    if not event.choices:
+                        continue
+                    delta = event.choices[0].delta
+                    if delta.content:
                         yielded = True
-                        yield event.choices[0].delta.content
+                        yield delta.content
+                    for tc in getattr(delta, "tool_calls", None) or []:
+                        slot = pending.setdefault(
+                            tc.index if tc.index is not None else len(pending),
+                            {"id": "", "name": "", "args": "", "extra": None})
+                        if tc.id:
+                            slot["id"] = tc.id
+                        if tc.function is not None:
+                            slot["name"] += tc.function.name or ""
+                            slot["args"] += tc.function.arguments or ""
+                        # Gemini attaches extra_content.google.thought_signature
+                        # and rejects the follow-up request without it.
+                        extra = (getattr(tc, "model_extra", None) or {}).get("extra_content")
+                        if extra:
+                            slot["extra"] = extra
+                if pending:
+                    yield ToolCallRequest([
+                        (s["id"] or f"call_{i}", s["name"], _parse_args(s["args"]), s["extra"])
+                        for i, s in sorted(pending.items()) if s["name"]
+                    ])
                 return
             except asyncio.CancelledError:
                 raise                    # barge-in: propagate, stream closes

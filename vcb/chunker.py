@@ -63,14 +63,25 @@ class SentenceChunker:
         if _inside_action(self._buf) and len(self._buf) < self.cfg.max_chars:
             return None
 
-        m = _SENTENCE_END.search(self._buf, min_chars - 1)
-        if m is None and not self._emitted_first:
-            m = _CLAUSE_END.search(self._buf, min_chars - 1)  # eager first chunk
+        m = self._boundary(_SENTENCE_END, min_chars - 1)
+        if m is None and not self._emitted_first and self.cfg.first_chunk_clause_split:
+            m = self._boundary(_CLAUSE_END, min_chars - 1)  # eager first chunk
         if m is not None:
             return self._take(m.end())
         if len(self._buf) >= self.cfg.max_chars:
             space = self._buf.rfind(" ", self.cfg.min_chars, self.cfg.max_chars)
             return self._take(space if space > 0 else self.cfg.max_chars)
+        return None
+
+    def _boundary(self, pattern: "re.Pattern[str]", start: int) -> "re.Match[str] | None":
+        """First split point that isn't inside a (...), [...] or *...* span --
+        splitting "today (Saturday, October 24)" at the inner comma would leave
+        both halves as broken fragments the sanitizer throws away."""
+        pos = max(0, start)
+        while (m := pattern.search(self._buf, pos)) is not None:
+            if not _inside_action(self._buf[: m.end()]):
+                return m
+            pos = m.end()
         return None
 
     def _take(self, end: int) -> str:

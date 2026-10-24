@@ -4,7 +4,9 @@
 # Python 3.12, the right PyTorch build for this PC (NVIDIA CUDA or CPU), and all
 # VCB dependencies into .runtime\ next to this repo, then opens the settings
 # window. Later runs start VCB straight away; dependencies are only reinstalled
-# when the requirements files change. Delete .runtime\ to uninstall all of it.
+# when the requirements files change. Choosing the IndexTTS voice adds its own
+# isolated environment (.runtime\indextts), installed on the next start.
+# Delete .runtime\ to uninstall all of it.
 #
 # Launcher switches (anything else is passed through to main.py):
 #   --settings   open the settings window and exit
@@ -73,11 +75,11 @@ if (-not (Test-Path $Py)) {
 #    dependency install: the user can configure VCB while nothing heavy exists) --
 Set-Location $Root
 function Ensure-SettingsDeps {
-    # sounddevice (+ numpy, which vcb.audio imports) lists mics/speakers in the
-    # window; small, so install them upfront.
-    & $Py -c "import vcb.audio.devices" 2>$null
+    # sounddevice (+ numpy, which vcb.audio imports) lists mics/speakers and
+    # tzdata lists time zones in the window; small, so install them upfront.
+    & $Py -c "import vcb.audio.devices, tzdata" 2>$null
     if ($LASTEXITCODE -ne 0) {
-        & $Uv pip install --python $Py --quiet -c (Join-Path $Root "requirements-lock.txt") sounddevice "numpy<2"
+        & $Uv pip install --python $Py --quiet -c (Join-Path $Root "requirements-lock.txt") sounddevice "numpy<2" tzdata
     }
 }
 if ($SettingsOnly) {
@@ -141,6 +143,75 @@ if ($Previous -ne $want) {
     }
     Set-Content $Stamp $want -NoNewline
 }
+
+# -- IndexTTS voice engine (only when selected) --------------------------------
+# IndexTTS pins Python 3.11, torch 2.8 and an older transformers, so it gets its
+# own isolated environment from its upstream lockfile (VCB talks to it through
+# vcb\tts\indextts_worker.py). Installed on the first start after choosing it.
+$IndexDir = Join-Path $Runtime "indextts"
+$IndexCommit = "d9e41aac89fd00b3d71497fddb287b7f24613712"   # index-tts/index-tts, IndexTTS-2.5
+
+function Get-TtsEngine {
+    if ($env:VCB_TTS_ENGINE) { return $env:VCB_TTS_ENGINE }
+    $envFile = Join-Path $Root ".env"
+    if (Test-Path $envFile) {
+        $m = Select-String -Path $envFile -Pattern '^\s*VCB_TTS_ENGINE\s*=\s*"?([A-Za-z0-9_-]+)' | Select-Object -Last 1
+        if ($m) { return $m.Matches[0].Groups[1].Value }
+    }
+    return "chatterbox-turbo"
+}
+
+function Invoke-Retry([scriptblock]$Action) {
+    # Antivirus can briefly lock fresh downloads; retrying gets past it.
+    for ($try = 1; $try -le 3; $try++) {
+        & $Action
+        if ($LASTEXITCODE -eq 0) { return $true }
+        if ($try -lt 3) { Write-Host "Install hiccup, retrying ($($try + 1)/3)..." -ForegroundColor Yellow; Start-Sleep 3 }
+    }
+    return $false
+}
+
+function Ensure-IndexTTS {
+    $stamp = Join-Path $IndexDir "installed.txt"
+    $want = "commit=$IndexCommit"
+    if ((Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq $want)) { return }
+    if (-not $HasNvidia) {
+        Write-Host "IndexTTS needs an NVIDIA GPU; VCB will use the Kokoro voice instead." -ForegroundColor Yellow
+        return
+    }
+    Step "Installing the IndexTTS voice engine (one-time, ~8 GB download, please wait)"
+    New-Item -ItemType Directory -Force $IndexDir | Out-Null
+    $src = Join-Path $IndexDir "src"
+    if (-not (Test-Path (Join-Path $src ".vcb-$IndexCommit"))) {
+        if (Test-Path $src) { Remove-Item -Recurse -Force $src }
+        $zip = Join-Path $IndexDir "src.zip"
+        $url = "https://github.com/index-tts/index-tts/archive/$IndexCommit.zip"
+        try { Invoke-WebRequest $url -OutFile $zip -UseBasicParsing -ErrorAction Stop }
+        catch { Fail "could not download IndexTTS from $url ($_)" }
+        Expand-Archive $zip $IndexDir -Force
+        Remove-Item $zip
+        Rename-Item (Join-Path $IndexDir "index-tts-$IndexCommit") $src
+        New-Item -ItemType File (Join-Path $src ".vcb-$IndexCommit") | Out-Null
+    }
+    $env:UV_PROJECT_ENVIRONMENT = Join-Path $IndexDir "venv"
+    $ok = Invoke-Retry { & $Uv sync --project $src --frozen --no-dev | Out-Host }
+    Remove-Item Env:\UV_PROJECT_ENVIRONMENT
+    if (-not $ok) { Fail "IndexTTS install failed (see above). Re-run VCB.bat to retry." }
+
+    $ipy = Join-Path $IndexDir "venv\Scripts\python.exe"
+    $ckpt = Join-Path $IndexDir "checkpoints"
+    Step "Downloading the IndexTTS-2.5 model"
+    $dl = "from huggingface_hub import snapshot_download as d; " +
+          "d('IndexTeam/IndexTTS-2.5', local_dir=r'$ckpt', ignore_patterns=['qwen0.6bemo4-merge/*'])"
+    if (-not (Invoke-Retry { & $ipy -c $dl | Out-Host })) { Fail "IndexTTS model download failed (see above)" }
+    $worker = Join-Path $Root "vcb\tts\indextts_worker.py"
+    if (-not (Invoke-Retry { & $ipy $worker --model-dir $ckpt --prepare | Out-Host })) {
+        Fail "IndexTTS helper model download failed (see above)"
+    }
+    Set-Content $stamp $want -NoNewline
+}
+
+if ((Get-TtsEngine) -eq "indextts") { Ensure-IndexTTS }
 
 # -- run ----------------------------------------------------------------------
 Step "Starting VCB (the first start also downloads the speech models, a few GB)"

@@ -6,8 +6,33 @@ from vcb.sanitize import (
     extract_action_tags,
     extract_emotion_tags,
     sanitize_for_speech,
+    soften_shouting,
     strip_speech_tags,
 )
+
+
+def test_shouted_sentence_is_normal_cased():
+    assert soften_shouting("LET'S GOOOOO! What a game.") == "Let's gooooo! What a game."
+
+
+def test_shouted_sentences_and_i_contractions():
+    assert soften_shouting("HELL YES! Nice. WHAT?! I'M SO PROUD.") == (
+        "Hell yes! Nice. What?! I'm so proud."
+    )
+
+
+def test_shouting_keeps_acronyms_and_leading_tags():
+    assert soften_shouting("<laugh> GG, THE GPU CARRIED!") == (
+        "<laugh> GG, the GPU carried!"
+    )
+
+
+def test_isolated_caps_word_softened_but_acronyms_kept():
+    assert soften_shouting("That was AMAZING on the GPU, NASA level.") == (
+        "That was amazing on the GPU, NASA level."
+    )
+    assert soften_shouting("Go get that W!") == "Go get that W!"
+    assert soften_shouting("I think AI is OK.") == "I think AI is OK."
 
 
 def test_strips_leading_speaker_label():
@@ -63,3 +88,42 @@ def test_extract_emotion_tags_in_order():
 
 def test_extract_action_tags():
     assert extract_action_tags("hey <action:wave> and <action:Dance>") == ["wave", "dance"]
+
+
+def test_short_parenthetical_stage_direction_removed():
+    assert sanitize_for_speech("Hello (laughs) there") == "Hello there"
+    assert sanitize_for_speech("(sighs) Fine.") == "Fine."
+
+
+def test_informative_parenthetical_kept():
+    out = sanitize_for_speech(
+        "From today (Saturday, October 24, 2026) until November 20, 2026, is **27 days**. "
+        "(That means you have a little under four weeks!)")
+    assert out == ("From today, Saturday, October 24, 2026, until November 20, 2026, "
+                   "is 27 days. That means you have a little under four weeks!")
+
+
+def test_bold_keeps_its_words():
+    assert sanitize_for_speech("That's **so** cool") == "That's so cool"
+
+
+def test_list_items_are_spoken_without_markers():
+    assert sanitize_for_speech("* Monday at 8 AM: go to the office.") == \
+        "Monday at 8 AM: go to the office."
+    assert sanitize_for_speech("Here's your list:\n- buy milk\n- call mom\n1. first") == \
+        "Here's your list: buy milk call mom first"
+    assert sanitize_for_speech("I'll do it *gently* now") == "I'll do it now"   # still an action
+
+
+def test_chunker_never_splits_inside_parentheses():
+    from vcb.chunker import SentenceChunker
+    from vcb.config import ChunkerConfig
+
+    raw = "From today (Saturday, October 24, 2026) until November 20, it's 27 days. Okay!"
+    ch = SentenceChunker(ChunkerConfig())
+    chunks = []
+    for i in range(0, len(raw), 5):
+        chunks += ch.push(raw[i:i + 5])
+    chunks += ch.flush()
+    assert all(c.count("(") == c.count(")") for c in chunks)
+    assert "27 days" in " ".join(sanitize_for_speech(c) for c in chunks)

@@ -8,6 +8,7 @@ import json
 import logging
 import re
 
+from ..clock import Clock
 from ..llm.base import LLMEngine
 
 log = logging.getLogger("vcb.memory")
@@ -32,6 +33,12 @@ _SYS = (
     "- In \"remove\", list existing keys that are duplicates of another key, "
     "temporary, or that the user said are wrong.\n"
     "- Use short snake_case keys and short values.\n"
+    "- Dates: each turn is prefixed with when it was said. Turn relative dates "
+    "('tomorrow', 'next Monday', 'in two weeks', 'the 20th') into absolute "
+    "dates (YYYY-MM-DD), counted from when they were said, in both the summary "
+    "and facts. Store upcoming events and deadlines as facts with their date "
+    "(e.g. permit_card_expiry: 2026-11-20); remove ones that are over and no "
+    "longer matter.\n"
     'Respond with ONLY a JSON object: {"summary": "...", "facts": {"key": "value"}, '
     '"remove": ["key"]}. No prose, no code fences.'
 )
@@ -54,8 +61,10 @@ _GENERIC = {
 
 
 def _content_words(text: str) -> list[str]:
+    # Numbers are skipped: "2026-11-20" is a normalized form of "20th November"
+    # and can't be matched word for word.
     return [w for w in re.findall(r"[a-z0-9]+", text.lower())
-            if len(w) >= 4 and w not in _GENERIC]
+            if len(w) >= 4 and w not in _GENERIC and not w.isdigit()]
 
 
 def grounded(value: str, user_text: str) -> bool:
@@ -75,8 +84,17 @@ def _norm(value: str) -> str:
     return re.sub(r"[\s_]+", " ", value.strip().lower())
 
 
-def _format_turns(turns: list[tuple[int, str, str]]) -> str:
-    return "\n".join(f"{role}: {text}" for _id, role, text in turns)
+def _format_turns(turns, clock: Clock | None = None) -> str:
+    """'[Sat 24 Oct 2026, 01:47] user: ...' -- turns are (id, role, text[, ts])."""
+    lines = []
+    for turn in turns:
+        _id, role, text = turn[0], turn[1], turn[2]
+        if clock is not None and len(turn) > 3 and turn[3]:
+            when = clock.from_timestamp(turn[3])
+            lines.append(f"[{when:%a %d %b %Y, %H:%M}] {role}: {text}")
+        else:
+            lines.append(f"{role}: {text}")
+    return "\n".join(lines)
 
 
 def _extract_json(text: str) -> dict | None:
@@ -91,21 +109,24 @@ def _extract_json(text: str) -> dict | None:
 async def consolidate(
     llm: LLMEngine,
     previous_summary: str | None,
-    turns: list[tuple[int, str, str]],
+    turns: list[tuple],
     existing_facts: dict[str, str] | None = None,
+    clock: Clock | None = None,
 ) -> tuple[str | None, dict[str, str], list[str]]:
     """Return (summary, facts to add/update, fact keys to remove). Best-effort;
     returns (None, {}, []) on parse failure. Proposed facts are filtered in code
     too: momentary ones, ones the user never actually mentioned, and values
-    that duplicate another key are dropped."""
+    that duplicate another key are dropped. Turns are (id, role, text[, ts]);
+    with a clock, they're dated so relative dates can be resolved."""
     if not turns:
         return None, {}, []
     existing = existing_facts or {}
     facts_text = "\n".join(f"- {k}: {v}" for k, v in existing.items()) or "(none yet)"
+    today = f"TODAY: {clock.now():%A, %Y-%m-%d}\n\n" if clock is not None else ""
     user = (
-        f"PREVIOUS SUMMARY:\n{previous_summary or '(none yet)'}\n\n"
+        f"{today}PREVIOUS SUMMARY:\n{previous_summary or '(none yet)'}\n\n"
         f"STORED FACTS:\n{facts_text}\n\n"
-        f"NEW TURNS:\n{_format_turns(turns)}"
+        f"NEW TURNS:\n{_format_turns(turns, clock)}"
     )
     messages = [
         {"role": "system", "content": _SYS},
@@ -124,7 +145,7 @@ async def consolidate(
 
     raw_facts = data.get("facts") or {}
     raw_facts = raw_facts if isinstance(raw_facts, dict) else {}
-    user_text = " ".join(text for _id, role, text in turns if role == "user")
+    user_text = " ".join(t[2] for t in turns if t[1] == "user")
     known = user_text + " " + " ".join(existing.values())
     taken = {_norm(v): k for k, v in existing.items()}
     facts: dict[str, str] = {}

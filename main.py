@@ -43,11 +43,15 @@ from vcb.llm import OpenAICompatLLM  # noqa: E402
 from vcb.orchestrator import Orchestrator, speaker_name  # noqa: E402
 from vcb.runtime import ManagedProcesses, setup_logging  # noqa: E402
 from vcb.stt import FasterWhisperSTT  # noqa: E402
-from vcb.tts import ChatterboxTurboTTS, KokoroTTS, OrpheusTTS, SesameCSMTTS, XTTSv2TTS  # noqa: E402
+from vcb.tts import (  # noqa: E402
+    ChatterboxTurboTTS, IndexTTSEngine, KokoroTTS, OrpheusTTS, SesameCSMTTS, XTTSv2TTS,
+)
 
 # TTS engine: "chatterbox-turbo" (default; clones your voice .wav, voices
-# <laugh>/<sigh> tags), "kokoro" (preset voices, light, runs on CPU too), and
-# optional extras "xtts", "orpheus", "csm" (see requirements-extras.txt).
+# <laugh>/<sigh> tags), "kokoro" (preset voices, light, runs on CPU too),
+# "indextts" (clones your .wav and acts emotions; the launcher installs its
+# isolated runtime on first use), and optional extras "xtts", "orpheus", "csm"
+# (see requirements-extras.txt).
 # Set VCB_TTS_ENGINE in .env (or the settings window).
 TTS_ENGINE = os.environ.get("VCB_TTS_ENGINE", "chatterbox-turbo")
 
@@ -55,6 +59,7 @@ _TTS_ENGINES = {
     "kokoro": KokoroTTS,
     "xtts": XTTSv2TTS,
     "chatterbox-turbo": ChatterboxTurboTTS,
+    "indextts": IndexTTSEngine,
     "orpheus": OrpheusTTS,
     "csm": SesameCSMTTS,
 }
@@ -160,6 +165,8 @@ def main() -> None:
                     key, env_value, file_value)
     has_cuda = cuda_available()
     tts_engine = adapt_to_hardware(cfg, TTS_ENGINE, has_cuda)
+    # Engines that act moods (IndexTTS) teach the LLM their mood tags.
+    cfg.llm.system_prompt += getattr(_TTS_ENGINES[tts_engine], "prompt_instructions", "")
     procs = ManagedProcesses(cfg)
     try:
         procs.start_server()                 # blocks until the backend is ready

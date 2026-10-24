@@ -15,6 +15,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from .clock import Clock, list_timezones, valid_timezone
 from .config import ENV_FILE, USER_DIR, available_prompts, resolve_path
 from .envfile import read_env, update_env
 from .gpu import (
@@ -23,6 +24,7 @@ from .gpu import (
 )
 
 DEFAULT_LABEL = "System default"
+AUTO_TZ = "Automatic (this PC)"
 
 # name -> (API base URL, default model, default thinking level)
 CLOUD_PROVIDERS = {
@@ -48,6 +50,27 @@ KOKORO_VOICES = (
     "af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky",
     "am_adam", "am_michael", "bf_emma", "bf_isabella", "bm_george", "bm_lewis",
 )
+# value -> (radio label, plain-language explanation shown under the choices)
+VOICE_ENGINES = {
+    "chatterbox-turbo": (
+        "Clone a voice - fast (Chatterbox)",
+        "Speaks in the voice from your sample. Starts talking within about a second "
+        "and sounds natural, but the tone stays much the same whatever the mood. "
+        "Uses ~4.7 GB of GPU memory."),
+    "indextts": (
+        "Clone a voice - emotional (IndexTTS-2.5)",
+        "Speaks in the voice from your sample AND acts out feelings - excited, "
+        "playful, sad, angry, surprised - picked by the assistant for each sentence. "
+        "The most human-sounding option, but it takes a few seconds before it starts "
+        "talking. NVIDIA GPU only, ~6.4 GB of GPU memory per copy (Auto adds a second "
+        "copy on another GPU with room, so long replies flow without pauses)."),
+    "kokoro": (
+        "Preset voice (Kokoro)",
+        "Built-in voices, very light (even runs without a GPU). Can't copy a voice "
+        "and shows little emotion."),
+}
+INDEXTTS_STAMP = r".runtime\indextts\installed.txt"
+INDEXTTS_AUTO_GPU = "Auto"
 
 
 def _ollama_running(base_url: str) -> bool:
@@ -200,19 +223,31 @@ class SettingsWindow:
         self.engine = tk.StringVar(value=engine)
         modes = ttk.Frame(frame)
         modes.grid(row=self.row, column=0, columnspan=3, sticky="w")
-        for value, text in (("chatterbox-turbo", "Clone a voice (Chatterbox)"),
-                            ("kokoro", "Preset voice (Kokoro)")):
+        for value, (text, _about) in VOICE_ENGINES.items():
             ttk.Radiobutton(modes, text=text, value=value, variable=self.engine,
-                            command=self._refresh).pack(side="left", padx=(0, 12))
-        if engine not in ("chatterbox-turbo", "kokoro"):
+                            command=self._refresh).pack(anchor="w")
+        if engine not in VOICE_ENGINES:
             ttk.Radiobutton(modes, text=engine, value=engine, variable=self.engine,
-                            command=self._refresh).pack(side="left")
+                            command=self._refresh).pack(anchor="w")
+        self.row += 1
+        self.engine_info = ttk.Label(frame, foreground="gray", wraplength=600, justify="left")
+        self.engine_info.grid(row=self.row, column=0, columnspan=3, sticky="w", pady=(2, 4))
         self.row += 1
 
         self.clone_box = self._group()
         self.voice_wav = tk.StringVar(value=get("VCB_VOICE_WAV"))
         self._file(self.clone_box, 0, "Voice sample", self.voice_wav, self._pick_wav,
                    hint="5-15 s of clean speech (.wav); empty = built-in voice")
+
+        self.indextts_box = self._group()
+        self.gpu_choices = [INDEXTTS_AUTO_GPU] + [
+            f"GPU {i}: {g.name} ({g.total_gb:.0f} GB)" for i, g in enumerate(self.gpus)]
+        saved_gpus = get("VCB_INDEXTTS_GPUS", "auto").strip()
+        self.indextts_gpu = tk.StringVar(value=next(
+            (c for c in self.gpu_choices[1:] if c.split(":")[0] == f"GPU {saved_gpus}"),
+            INDEXTTS_AUTO_GPU))
+        self._combo(self.indextts_box, 0, "Voice GPU", self.indextts_gpu, self.gpu_choices,
+                    readonly=True, hint="Auto: one copy on each GPU with room (faster)")
 
         self.kokoro_box = self._group()
         self.kokoro_voice = tk.StringVar(value=get("VCB_KOKORO_VOICE", "af_heart"))
@@ -229,6 +264,13 @@ class SettingsWindow:
         self.user_name = tk.StringVar(value=get("VCB_USER_NAME"))
         self._entry(frame, self.row, "Your name", self.user_name,
                     hint="optional; how the assistant refers to you")
+        self.row += 1
+        auto_tz = f"{AUTO_TZ} ({Clock().offset_label()})"
+        self.auto_tz_label = auto_tz
+        self.timezone = tk.StringVar(value=get("VCB_TIMEZONE") or auto_tz)
+        self._combo(frame, self.row, "Time zone", self.timezone,
+                    [auto_tz, *list_timezones()],
+                    hint="type to search, e.g. Europe/Berlin")
         self.row += 1
 
         # -- audio ------------------------------------------------------------
@@ -321,6 +363,13 @@ class SettingsWindow:
             self.key_link.grid_remove()
         self.clone_box.grid() if engine != "kokoro" else self.clone_box.grid_remove()
         self.kokoro_box.grid() if engine == "kokoro" else self.kokoro_box.grid_remove()
+        if engine == "indextts" and self.gpus:
+            self.indextts_box.grid()
+        else:
+            self.indextts_box.grid_remove()
+        self.engine_info.config(text=self._engine_description(engine), foreground="gray")
+        if engine == "indextts" and not self.gpus:
+            self.engine_info.config(foreground="#b06000")
         if backend == "ollama":
             self._update_models()
             if _ollama_running(self.ollama_base):
@@ -334,6 +383,18 @@ class SettingsWindow:
                 self.ollama_status.config(
                     text="Ollama not found - install it first", foreground="red")
                 self.ollama_link.grid()
+
+    def _engine_description(self, engine: str) -> str:
+        about = VOICE_ENGINES.get(engine, ("", "Optional engine (see README)."))[1]
+        if engine == "indextts":
+            if not self.gpus:
+                about += "\nNo NVIDIA GPU found: VCB would fall back to the preset voice."
+            elif Path(resolve_path(INDEXTTS_STAMP)).is_file():
+                about += "\nInstalled."
+            else:
+                about += ("\nNot installed yet: the next VCB start downloads and sets it "
+                          "up (one-time, ~8 GB, a few minutes).")
+        return about
 
     def _budget(self) -> float | None:
         """GPU memory left for the LLM, or None without an NVIDIA GPU."""
@@ -445,9 +506,20 @@ class SettingsWindow:
         if backend == "ollama" and not model_tag(self.ollama_model.get()):
             messagebox.showerror("VCB settings", "Choose a model for Ollama.")
             return
+        tz = self.timezone.get().strip()
+        tz = None if not tz or tz.startswith(AUTO_TZ) else tz
+        if tz and not valid_timezone(tz):
+            messagebox.showerror("VCB settings",
+                                 f"Unknown time zone: {tz}\nUse a name like Europe/Berlin.")
+            return
         voice = self.voice_wav.get().strip()
         if voice and not Path(resolve_path(voice)).is_file():
             messagebox.showerror("VCB settings", f"Voice sample not found:\n{voice}")
+            return
+        if self.engine.get() == "indextts" and not voice:
+            messagebox.showerror("VCB settings",
+                                 "IndexTTS has no built-in voice: choose a voice sample "
+                                 "(.wav, 5-15 s of clean speech).")
             return
         device = lambda v: None if v.get() == DEFAULT_LABEL else v.get()  # noqa: E731
         bool_str = lambda v: "true" if v.get() else "false"  # noqa: E731
@@ -462,8 +534,12 @@ class SettingsWindow:
             "VCB_TTS_ENGINE": self.engine.get(),
             "VCB_VOICE_WAV": self._store_voice(voice) or None,
             "VCB_KOKORO_VOICE": self.kokoro_voice.get(),
+            "VCB_INDEXTTS_GPUS": (
+                "auto" if self.indextts_gpu.get() == INDEXTTS_AUTO_GPU
+                else self.indextts_gpu.get().split(":")[0].removeprefix("GPU ")),
             "VCB_ACTIVE_PROMPT": self.persona.get(),
             "VCB_USER_NAME": self.user_name.get().strip() or None,
+            "VCB_TIMEZONE": tz,
             "VCB_INPUT_DEVICE": device(self.mic),
             "VCB_OUTPUT_DEVICE": device(self.speaker),
             "VCB_MEMORY_ENABLED": bool_str(self.memory),

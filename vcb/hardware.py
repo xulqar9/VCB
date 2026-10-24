@@ -9,8 +9,8 @@ from .config import AppConfig
 
 log = logging.getLogger("vcb.hardware")
 
-TTS_ENGINES = ("chatterbox-turbo", "kokoro", "xtts", "orpheus", "csm")
-_GPU_ONLY_TTS = {"chatterbox-turbo", "xtts", "orpheus", "csm"}
+TTS_ENGINES = ("chatterbox-turbo", "kokoro", "indextts", "xtts", "orpheus", "csm")
+_GPU_ONLY_TTS = {"chatterbox-turbo", "indextts", "xtts", "orpheus", "csm"}
 
 
 def cuda_available() -> bool:
@@ -44,7 +44,7 @@ def adapt_to_hardware(cfg: AppConfig, tts_engine: str, has_cuda: bool) -> str:
 
 
 # Engines whose GPU we can choose (orpheus runs inside llama-cpp, not torch).
-_PLACEABLE_TTS = {"chatterbox-turbo", "kokoro", "xtts", "csm"}
+_PLACEABLE_TTS = {"chatterbox-turbo", "kokoro", "indextts", "xtts", "csm"}
 
 
 def place_on_gpus(cfg: AppConfig, tts_engine: str, has_cuda: bool) -> None:

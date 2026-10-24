@@ -235,6 +235,16 @@ class TTSConfig:
     )
     csm_compile: bool = False            # torch.compile: needs triton, but REGRESSES
                                          # CSM (constant recompiles) -> leave off
+    # indextts (isolated runtime installed by the launcher; clones voice_wav)
+    indextts_dir: str = r".runtime\indextts"
+    # GPUs to run IndexTTS on (nvidia-smi numbers): "auto" = the voice's GPU plus
+    # one more with room (renders ahead, no pauses mid-reply), or e.g. "1" / "0,1".
+    indextts_gpus: str = field(
+        default_factory=lambda: _env_str("VCB_INDEXTTS_GPUS", "auto"))
+    indextts_steps: int = 25             # mel diffusion steps (IndexTTS default);
+                                         # fewer is faster but audibly rougher
+    indextts_bf16: bool = True           # False = fp32: ~3x slower
+    indextts_emotion_strength: float = 1.0  # scales the mood vectors (0 = neutral)
     chunk_queue_max: int = 8             # pending text chunks awaiting synthesis
 
 
@@ -243,6 +253,7 @@ class ChunkerConfig:
     min_chars: int = 24                  # don't synthesize tiny fragments
     max_chars: int = 240                 # force a split even mid-sentence
     first_chunk_min_chars: int = 8       # ship the first chunk ASAP for low latency
+    first_chunk_clause_split: bool = True  # first chunk may end at a comma
 
 
 @dataclass
@@ -447,9 +458,11 @@ class ProactiveConfig:
     greeting_hint: str = field(default_factory=lambda: (
         f"You're opening the conversation before {USER_NAME} has said anything. "
         "Greet them warmly and with genuine energy, in one or two spoken "
-        "sentences, then invite them in with a real question - what they're up "
-        "to, how they're doing, or what they'd like to get into. Sound happy to "
-        "see them, never flat or scripted."
+        "sentences. If you've talked before, you can "
+        "follow up on something from last time or mention how long it's been, "
+        "if it feels natural. Then invite them in with a real question - what "
+        "they're up to, how they're doing, or what they'd like to get into. "
+        "Sound happy to see them, never flat or scripted."
     ))
     waiting_hint: str = field(default_factory=lambda: (
         "Say what you'd naturally say into the silence, out loud, in one or two "
@@ -520,8 +533,14 @@ class SkillsConfig:
     model phrase the spoken reply."""
     enabled: bool = True
     max_tool_iters: int = 3              # cap tool calls per turn (loop guard)
+    # How tools are offered to the model: "native" = the API's function calling
+    # (reliable on cloud models, which tend to ignore a text protocol), "json" =
+    # VCB's own JSON-in-text protocol (works with any local model), "auto" =
+    # native for the cloud backend, json otherwise.
+    tool_mode: str = field(default_factory=lambda: _env_str("VCB_TOOL_MODE", "auto"))
     enabled_skills: tuple[str, ...] = (
         "datetime", "calculator", "set_timer",
+        "set_reminder", "list_reminders", "cancel_reminder",
         "remember", "recall", "add_note", "list_notes",
     )
 
@@ -588,6 +607,9 @@ class AppConfig:
     prosody: ProsodyConfig = field(default_factory=ProsodyConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     barge_in: bool = True                # user speech interrupts playback
+    # The user's time zone as an IANA name ("Europe/Berlin", "America/New_York").
+    # Empty = whatever this PC uses (incl. its daylight-saving rules).
+    timezone: str = field(default_factory=lambda: _env_str("VCB_TIMEZONE", "").strip())
     turn_taking: TurnTakingConfig = field(default_factory=TurnTakingConfig)
     resume: ResumeConfig = field(default_factory=ResumeConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)

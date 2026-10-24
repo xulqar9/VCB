@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import operator
 import time
+from datetime import datetime, timedelta
 
+from ..clock import Clock
 from .base import Skill, SkillContext
 
 # -- safe arithmetic ---------------------------------------------------------
@@ -44,14 +47,141 @@ class DateTimeSkill(Skill):
 
     async def run(self, args: dict, ctx: SkillContext) -> str:
         what = str(args.get("what", "both")).lower()
-        now = time.localtime()
-        date = time.strftime("%A, %B %d, %Y", now)
-        clock = time.strftime("%I:%M %p", now).lstrip("0")
+        now = (ctx.clock or Clock()).now()
+        date = f"{now:%A}, {now.day} {now:%B %Y}"
+        clock = now.strftime("%I:%M %p").lstrip("0")
         if what == "time":
             return f"The time is {clock}."
         if what == "date":
             return f"Today is {date}."
         return f"It is {clock} on {date}."
+
+
+_AT_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S",
+               "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d")
+
+
+def _parse_local(text: str, clock: Clock) -> datetime | None:
+    """'2026-10-26 08:00' (or just '08:00' = next time it's 8) in the user's zone."""
+    text = text.strip()
+    for fmt in _AT_FORMATS:
+        try:
+            naive = datetime.strptime(text, fmt)
+            if fmt == "%Y-%m-%d":
+                naive = naive.replace(hour=9)          # a date alone = 9 AM
+            return clock.localize(naive)
+        except ValueError:
+            continue
+    try:
+        hm = datetime.strptime(text, "%H:%M")
+    except ValueError:
+        return None
+    now = clock.now()
+    when = clock.localize(datetime.combine(now.date(), hm.time()))
+    if when <= now:
+        when = clock.localize(datetime.combine(now.date() + timedelta(days=1), hm.time()))
+    return when
+
+
+def _spoken_when(when: datetime, clock: Clock) -> str:
+    now = clock.now()
+    t = when.strftime("%I:%M %p").lstrip("0")
+    days = (when.date() - now.date()).days
+    if days == 0:
+        return f"today at {t}"
+    if days == 1:
+        return f"tomorrow at {t}"
+    return f"{when:%A}, {when.day} {when:%B} at {t}"
+
+
+class SetReminderSkill(Skill):
+    name = "set_reminder"
+    description = ("Remind the user at a specific date and time (kept even if VCB "
+                   "restarts). Work out the exact local time from the current date "
+                   "and time you were given.")
+    parameters = {
+        "at": 'local date and time "YYYY-MM-DD HH:MM" (or use in_minutes)',
+        "in_minutes": "alternatively: minutes from now",
+        "text": "what to remind them about",
+    }
+    param_types = {"in_minutes": "number"}
+
+    async def run(self, args: dict, ctx: SkillContext) -> str:
+        clock = ctx.clock or Clock()
+        text = str(args.get("text", "")).strip() or "your reminder"
+        when = None
+        if args.get("at"):
+            when = _parse_local(str(args["at"]), clock)
+            if when is None:
+                return 'Error: "at" must look like "2026-10-26 08:00".'
+        elif args.get("in_minutes") is not None:
+            try:
+                minutes = float(args["in_minutes"])
+            except (TypeError, ValueError):
+                return "Error: in_minutes must be a number."
+            when = clock.now() + timedelta(minutes=minutes)
+        if when is None:
+            return 'Error: give either "at" or "in_minutes".'
+        if when <= clock.now() - timedelta(minutes=1):
+            return f"Error: {_spoken_when(when, clock)} has already passed."
+        spoken = _spoken_when(when, clock)
+        if ctx.memory is None:
+            delay = max(0.0, when.timestamp() - time.time())
+
+            async def _fire() -> None:
+                await asyncio.sleep(delay)
+                await ctx.speak(f"Hey, here's your reminder: {text}.")
+
+            ctx.loop.create_task(_fire())
+            return (f"Reminder set for {spoken}: {text}. (Memory is off, so it only "
+                    "works while VCB stays open.)")
+        rid = await asyncio.to_thread(ctx.memory.add_reminder, when.timestamp(), text)
+        return f"Reminder {rid} set for {spoken}: {text}."
+
+
+class ListRemindersSkill(Skill):
+    name = "list_reminders"
+    description = "List the user's upcoming reminders."
+    parameters = {}
+
+    async def run(self, args: dict, ctx: SkillContext) -> str:
+        if ctx.memory is None:
+            return "Memory is off, so there are no saved reminders."
+        clock = ctx.clock or Clock()
+        pending = await asyncio.to_thread(ctx.memory.pending_reminders)
+        if not pending:
+            return "No upcoming reminders."
+        return "Upcoming reminders:\n" + "\n".join(
+            f"- (id {rid}) {_spoken_when(clock.from_timestamp(due), clock)}: {text}"
+            for rid, due, text in pending)
+
+
+class CancelReminderSkill(Skill):
+    name = "cancel_reminder"
+    description = "Cancel an upcoming reminder."
+    parameters = {"id": "reminder id (from list_reminders)",
+                  "text": "or: words from the reminder"}
+
+    async def run(self, args: dict, ctx: SkillContext) -> str:
+        if ctx.memory is None:
+            return "Memory is off, so there are no saved reminders."
+        pending = await asyncio.to_thread(ctx.memory.pending_reminders)
+        target = None
+        if args.get("id") is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                rid = int(args["id"])
+                target = next((p for p in pending if p[0] == rid), None)
+        elif args.get("text"):
+            needle = str(args["text"]).lower()
+            matches = [p for p in pending if needle in p[2].lower()]
+            if len(matches) > 1:
+                return "Several reminders match; which one? " + "; ".join(
+                    f"id {p[0]}: {p[2]}" for p in matches)
+            target = matches[0] if matches else None
+        if target is None:
+            return "I couldn't find that reminder."
+        await asyncio.to_thread(ctx.memory.cancel_reminder, target[0])
+        return f"Cancelled the reminder: {target[2]}."
 
 
 class CalculatorSkill(Skill):
@@ -89,7 +219,7 @@ class SetTimerSkill(Skill):
 
         async def _fire() -> None:
             await asyncio.sleep(seconds)
-            msg = f"Reminder: {label}." if label else "Your timer is up."
+            msg = f"Hey, your timer is up: {label}." if label else "Your timer is up."
             await ctx.speak(msg)
 
         ctx.loop.create_task(_fire())
@@ -163,6 +293,9 @@ _ALL: dict[str, type[Skill]] = {
     "datetime": DateTimeSkill,
     "calculator": CalculatorSkill,
     "set_timer": SetTimerSkill,
+    "set_reminder": SetReminderSkill,
+    "list_reminders": ListRemindersSkill,
+    "cancel_reminder": CancelReminderSkill,
     "remember": RememberSkill,
     "recall": RecallSkill,
     "add_note": AddNoteSkill,

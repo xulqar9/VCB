@@ -2,6 +2,16 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ToolCallRequest:
+    """Native (OpenAI-style) tool calls the model made, yielded once at the end
+    of a stream instead of text: [(call_id, tool_name, args, extra)]. `extra`
+    is provider data that must be echoed back with the call (e.g. Gemini's
+    thought_signature), or None."""
+    calls: list[tuple[str, str, dict, dict | None]] = field(default_factory=list)
 
 
 class LLMConfigError(RuntimeError):
@@ -19,11 +29,14 @@ class LLMEngine(ABC):
     async def load(self) -> None: ...
 
     @abstractmethod
-    def stream(self, messages: list[dict[str, str]],
+    def stream(self, messages: list[dict],
                temperature: float | None = None,
-               max_tokens: int | None = None) -> AsyncIterator[str]:
+               max_tokens: int | None = None,
+               tools: list[dict] | None = None) -> AsyncIterator["str | ToolCallRequest"]:
         """Yield text deltas. Must abort promptly when the consumer cancels.
-        temperature/max_tokens override the config defaults for this call."""
+        temperature/max_tokens override the config defaults for this call.
+        With `tools` (OpenAI function specs), a ToolCallRequest may be yielded
+        last if the model chose to call tools."""
 
     @abstractmethod
     async def close(self) -> None: ...

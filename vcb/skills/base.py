@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import asyncio
 
+    from ..clock import Clock
     from ..memory import MemoryStore
 
 
@@ -27,6 +28,7 @@ class SkillContext:
     memory: "MemoryStore | None"
     speak: Callable[[str], Awaitable[None]]   # enqueue text for immediate TTS
     loop: "asyncio.AbstractEventLoop"
+    clock: "Clock | None" = None              # the user's time zone (None = PC's)
 
 
 @dataclass
@@ -40,6 +42,8 @@ class Skill(ABC):
     description: str = ""
     # arg name -> short human description, rendered into the system prompt.
     parameters: dict[str, str] = {}
+    # JSON-schema type per arg for native function calling (default "string").
+    param_types: dict[str, str] = {}
 
     @abstractmethod
     async def run(self, args: dict, ctx: SkillContext) -> str:

@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS notes (
     ts   REAL NOT NULL,
     text TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS reminders (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    due_ts     REAL NOT NULL,
+    text       TEXT NOT NULL,
+    created_ts REAL NOT NULL,
+    fired      INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -120,8 +127,15 @@ class MemoryStore:
 
     def recall(self, query_vec: np.ndarray, top_k: int, min_similarity: float,
                exclude_recent: int = 0) -> list[str]:
-        """Most similar past turns, oldest-first, skipping the newest
-        `exclude_recent` rows (those are already in the live conversation)."""
+        """Most similar past turns as "role: text", oldest-first, skipping the
+        newest `exclude_recent` rows (those are already in the live conversation)."""
+        return [f"{role}: {text}" for _ts, role, text in
+                self.recall_entries(query_vec, top_k, min_similarity, exclude_recent)]
+
+    def recall_entries(self, query_vec: np.ndarray, top_k: int, min_similarity: float,
+                       exclude_recent: int = 0) -> list[tuple[float, str, str]]:
+        """Like recall(), but as (timestamp, role, text) so callers can say
+        when something was said."""
         with self._lock:
             cutoff = self._n - max(0, exclude_recent)
             k = min(top_k, cutoff)
@@ -135,11 +149,16 @@ class MemoryStore:
             if not hits:
                 return []
             placeholders = ",".join("?" * len(hits))
-            rows = self._db.execute(
-                f"SELECT role, text FROM turns WHERE id IN ({placeholders}) ORDER BY id",
+            return self._db.execute(
+                f"SELECT ts, role, text FROM turns WHERE id IN ({placeholders}) ORDER BY id",
                 hits,
             ).fetchall()
-        return [f"{role}: {text}" for role, text in rows]
+
+    def last_turn_ts(self) -> float | None:
+        """When the most recent stored turn happened (None if never)."""
+        with self._lock:
+            row = self._db.execute("SELECT MAX(ts) FROM turns").fetchone()
+        return row[0] if row and row[0] is not None else None
 
     # -- consolidation: rolling summary + durable profile facts -------------
 
@@ -155,12 +174,12 @@ class MemoryStore:
             return int(row[0].split("-")[1])
         return 0
 
-    def unconsolidated_turns(self) -> list[tuple[int, str, str]]:
-        """Turns newer than the latest summary, oldest-first."""
+    def unconsolidated_turns(self) -> list[tuple[int, str, str, float]]:
+        """Turns newer than the latest summary as (id, role, text, ts), oldest-first."""
         last = self.last_covered_id()
         with self._lock:
             return self._db.execute(
-                "SELECT id, role, text FROM turns WHERE id > ? ORDER BY id",
+                "SELECT id, role, text, ts FROM turns WHERE id > ? ORDER BY id",
                 (last,),
             ).fetchall()
 
@@ -181,11 +200,46 @@ class MemoryStore:
             self._db.commit()
 
     def latest_summary(self) -> str | None:
+        entry = self.latest_summary_entry()
+        return entry[0] if entry else None
+
+    def latest_summary_entry(self) -> tuple[str, float] | None:
+        """(text, when it was written) of the newest summary."""
         with self._lock:
             row = self._db.execute(
-                "SELECT text FROM summaries ORDER BY id DESC LIMIT 1"
+                "SELECT text, ts FROM summaries ORDER BY id DESC LIMIT 1"
             ).fetchone()
-        return row[0] if row else None
+        return (row[0], row[1]) if row else None
+
+    # -- reminders (survive restarts; due times are UTC epoch seconds) -----
+
+    def add_reminder(self, due_ts: float, text: str) -> int:
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO reminders (due_ts, text, created_ts) VALUES (?,?,?)",
+                (due_ts, text, time.time()),
+            )
+            self._db.commit()
+            return cur.lastrowid
+
+    def pending_reminders(self) -> list[tuple[int, float, str]]:
+        """Not-yet-delivered reminders as (id, due_ts, text), soonest first."""
+        with self._lock:
+            return self._db.execute(
+                "SELECT id, due_ts, text FROM reminders WHERE fired = 0 ORDER BY due_ts"
+            ).fetchall()
+
+    def mark_reminder_fired(self, reminder_id: int) -> None:
+        with self._lock:
+            self._db.execute("UPDATE reminders SET fired = 1 WHERE id = ?", (reminder_id,))
+            self._db.commit()
+
+    def cancel_reminder(self, reminder_id: int) -> bool:
+        with self._lock:
+            cur = self._db.execute(
+                "DELETE FROM reminders WHERE id = ? AND fired = 0", (reminder_id,))
+            self._db.commit()
+            return cur.rowcount > 0
 
     def upsert_fact(self, key: str, value: str, source: str = "consolidation") -> None:
         with self._lock:
@@ -245,7 +299,7 @@ class MemoryStore:
         with self._lock:
             self._db.executescript(
                 "DELETE FROM turns; DELETE FROM facts; DELETE FROM summaries; "
-                "DELETE FROM notes;"
+                "DELETE FROM notes; DELETE FROM reminders;"
             )
             self._db.commit()
             self._ids = []

@@ -39,7 +39,8 @@ say *"go on"*. One double-click to install, no Python setup required.
 | 🧬 **Voice cloning** | Give it 5–15 seconds of any voice (yours, with consent) and it speaks in that voice — with natural `<laugh>`s and `<sigh>`s. |
 | 🧠 **Any brain** | Local & free with **Ollama**, free-tier **Google Gemini**, **OpenAI**, OpenRouter, Groq, or your own GGUF via llama.cpp. |
 | 💾 **Long-term memory** | Remembers facts about you and past conversations across sessions — stored in a local file on your PC. |
-| 🛠️ **Tools** | Timers, reminders, calculator, notes, date/time — called by the model mid-conversation. |
+| 🛠️ **Tools** | Timers, reminders, calculator, notes — called by the model mid-conversation. Reminders take real times (*"Monday at 8"*) and survive restarts. |
+| 🕒 **Knows the date & time** | Always knows the current date, time and your time zone, how long ago things were said, and turns *"next Monday"* into a real date in its memory. |
 | 💬 **Live transcript** | A chat window that writes each word as it's heard, so you can read along. |
 | 🎭 **Personas** | 10 built-in personalities (coach, mentor, storyteller, devil's advocate, …) — or write your own in a text file. |
 | 🗣️ **AI-led mode** | Optionally the assistant greets you first and keeps the conversation going when you go quiet — and backs off when you're busy or ignore it. |
@@ -105,13 +106,23 @@ GPU free for a game or other work, set `VCB_CUDA_DEVICES` in `.env`.)
 | **32 GB+** | `gemma3:27b` | `gemma3:27b` |
 
 <sub>Measured: speech recognition ~2.2 GB, cloned voice (Chatterbox) ~4.7 GB,
-preset voice (Kokoro) ~0.7 GB; 2 GB kept free. VCB runs Ollama models with an
+emotional cloned voice (IndexTTS) ~6.4 GB, preset voice (Kokoro) ~0.7 GB; 2 GB
+kept free. VCB runs Ollama models with an
 8k-token context, which needs far less memory than Ollama's default.</sub>
 
 ## 🗣️ Voices
 
-- **Clone a voice (Chatterbox)** — pick a 5–15 s `.wav` of clean speech in the
-  settings. No file? It uses a pleasant built-in voice.
+- **Clone a voice — fast (Chatterbox)** — pick a 5–15 s `.wav` of clean speech
+  in the settings. No file? It uses a pleasant built-in voice.
+- **Clone a voice — emotional (IndexTTS-2.5)** — your voice sample, plus real
+  emotion: the assistant tags each sentence with a mood (`<excited>`,
+  `<playful>`, `<sad>`, `<angry>`, `<surprised>`, …) and the voice acts it. The
+  most human-sounding option, but it takes a few seconds before it starts
+  talking. NVIDIA GPU only, ~6.4 GB per copy: with **Voice GPU = Auto** a second
+  copy runs on another GPU that has room, rendering the next part of a reply
+  while the current one plays (or pin it to one GPU in the settings). It runs in its own Python (it pins different library
+  versions), which `VCB.bat` downloads into `.runtime\indextts` the first time
+  you start VCB with it selected (one-time, ~8 GB).
 - **Preset voices (Kokoro)** — light and fast, works even without a GPU.
 - **More engines** — XTTS v2, Orpheus and Sesame CSM are available as optional
   extras: `VCB.bat --extras`.
@@ -137,7 +148,7 @@ flowchart LR
     stt --> mem[(Memory)]
     mem --> llm{{LLM<br/>Ollama · Gemini · OpenAI}}
     llm -->|streamed tokens| chunk[Sentence<br/>chunker]
-    chunk --> tts[Chatterbox / Kokoro<br/>TTS]
+    chunk --> tts[Chatterbox / IndexTTS / Kokoro<br/>TTS]
     tts --> spk([🔊 Speaker])
     tts -.-> chat[[💬 Live transcript]]
     vad -.->|you talk = barge-in| llm
@@ -328,7 +339,8 @@ author's permission — [open an issue](../../issues) or contact
 This repository contains only VCB's own code. Libraries and models are not
 included: the launcher downloads them from their official sources (PyPI,
 Hugging Face) and each keeps its own license — e.g. Chatterbox, Kokoro and
-Whisper are MIT/Apache-2.0, Kokoro's English phonemizer is GPL-3.0, the optional
+Whisper are MIT/Apache-2.0, Kokoro's English phonemizer is GPL-3.0, IndexTTS
+uses the bilibili IndexTTS model license, the optional
 XTTS v2 engine is Coqui's non-commercial CPML, and LLMs follow their provider's
 terms.
 
@@ -338,6 +350,7 @@ VCB stands on the shoulders of great open-source work:
 [Silero VAD](https://github.com/snakers4/silero-vad) ·
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) ·
 [Chatterbox](https://github.com/resemble-ai/chatterbox) ·
+[IndexTTS](https://github.com/index-tts/index-tts) ·
 [Kokoro](https://github.com/hexgrad/kokoro) ·
 [Ollama](https://ollama.com) ·
 [FastEmbed](https://github.com/qdrant/fastembed) ·

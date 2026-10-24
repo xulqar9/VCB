@@ -18,7 +18,7 @@ from pathlib import Path
 
 # Measured GPU memory of VCB's speech stack (GB).
 STT_VRAM_GB = 2.2                          # faster-whisper large-v3-turbo, float16
-TTS_VRAM_GB = {"chatterbox-turbo": 4.7, "kokoro": 0.7}
+TTS_VRAM_GB = {"chatterbox-turbo": 4.7, "kokoro": 0.7, "indextts": 6.4}
 TTS_VRAM_DEFAULT_GB = 4.7                  # optional engines: assume a heavy one
 
 DEFAULT_RESERVE_GB = 2.0                   # left free for the desktop, browser, games

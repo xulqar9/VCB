@@ -27,6 +27,9 @@ faster-whisper>=1.0
 nvidia-cublas-cu12; sys_platform == 'win32'
 nvidia-cudnn-cu12; sys_platform == 'win32'
 
+# Time zones (zoneinfo needs this database on Windows)
+tzdata
+
 # LLM client (any OpenAI-compatible server: Ollama, cloud APIs, llama.cpp)
 openai>=1.30
 

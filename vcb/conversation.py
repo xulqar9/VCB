@@ -40,12 +40,17 @@ class ConversationManager:
 
     def messages(self, resume_hint: str | None = None,
                  memory_block: str | None = None,
-                 tools_block: str | None = None) -> list[dict[str, str]]:
+                 tools_block: str | None = None,
+                 now_block: str | None = None) -> list[dict[str, str]]:
         max_msgs = self.cfg.history_max_turns * 2
         trimmed = self._history[-max_msgs:]
         msgs = [{"role": "system", "content": self.cfg.system_prompt}]
         if tools_block:  # persistent tool catalogue, right after the persona
             msgs.append({"role": "system", "content": tools_block})
+        # Current date/time: after the unchanging persona/tools so local servers
+        # can still reuse their cached prompt prefix.
+        if now_block:
+            msgs.append({"role": "system", "content": now_block})
         if memory_block:  # recalled long-term context, before the recent turns
             msgs.append({"role": "system", "content": memory_block})
         msgs += trimmed

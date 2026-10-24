@@ -21,6 +21,8 @@ one crashes, so a single unexpected error can't end the session.
 import asyncio
 import collections
 import contextlib
+import dataclasses
+import json
 import logging
 import re
 import time
@@ -31,15 +33,17 @@ from .audio import MicCapture, SpeakerPlayback
 from .audiofx import apply_gain_limit, silence, trailing_pause_seconds
 from .avatar import AvatarBridge
 from .chunker import SentenceChunker
+from .clock import Clock
 from .config import USER_NAME, AppConfig, resolve_path
 from .conversation import ConversationManager
-from .llm.base import LLMConfigError, LLMEngine
+from .llm.base import LLMConfigError, LLMEngine, ToolCallRequest
 from .memory import Embedder, MemoryStore, consolidate
 from .metrics import TurnMetrics
 from .sanitize import (
     extract_action_tags,
     extract_emotion_tags,
     sanitize_for_speech,
+    soften_shouting,
     strip_speech_tags,
 )
 from .skills import (
@@ -88,6 +92,8 @@ _ECHO_MARKERS = (
     "speaker label",
     "stage direction",
     "nobody said this",
+    "for your own reference only",
+    "previous conversation with",
 )
 
 
@@ -156,6 +162,11 @@ class Orchestrator:
         self.stt = stt
         self.llm = llm
         self.tts = tts
+        # Tone-of-voice tags the engine acts (IndexTTS's <excited>, <sad>, ...).
+        self._mood_tags: frozenset[str] = frozenset(getattr(tts, "mood_tags", ()))
+        # Engines that sound robotic on short fragments ask for bigger chunks.
+        self._chunker_cfg = dataclasses.replace(
+            cfg.chunker, **getattr(tts, "chunker_overrides", {}))
         self.mic = MicCapture(cfg.audio)
         self.speaker = SpeakerPlayback(cfg.audio)
         self.avatar: AvatarBridge | None = (
@@ -171,6 +182,10 @@ class Orchestrator:
         self.vad = VADSegmenter(cfg.vad, cfg.audio)
         self.convo = ConversationManager(cfg.llm)
         self._name = speaker_name(cfg.llm.system_prompt)
+        # The user's clock (their time zone); every reply gets the current
+        # date/time so the model never has to guess it.
+        self.clock = Clock(cfg.timezone)
+        self._last_seen_ts: float | None = None   # previous session's last turn
         # Live chat transcript: words appear as they're heard (see transcript.py).
         self._transcript = Transcript(transcript_path, self._name)
         self._pacer = WordPacer(self._transcript)
@@ -221,9 +236,16 @@ class Orchestrator:
         self._tasks: list[asyncio.Task] = []
         self._skills: SkillRegistry | None = None
         self._tools_block: str | None = None
+        self._tool_specs: list[dict] | None = None       # set = native tool calling
         if cfg.skills.enabled:
             self._skills = SkillRegistry(build_skills(cfg.skills.enabled_skills))
-            self._tools_block = self._skills.prompt_block() or None
+            mode = cfg.skills.tool_mode
+            native = mode == "native" or (mode == "auto" and cfg.backend == "cloud")
+            if native and self._skills:
+                self._tool_specs = self._skills.openai_tools()
+                self._tools_block = self._skills.native_prompt_block() or None
+            else:
+                self._tools_block = self._skills.prompt_block() or None
 
     async def run(self) -> None:
         log.info("loading models...")
@@ -232,6 +254,8 @@ class Orchestrator:
         )
         if self._embedder is not None:
             await asyncio.to_thread(self._embedder.load)  # warm the embedder (CPU)
+        if self._memory is not None:
+            self._last_seen_ts = await asyncio.to_thread(self._memory.last_turn_ts)
         await self._refresh_stt_vocab()
         # Playback must match whatever rate the chosen TTS engine produces.
         self.cfg.audio.output_sample_rate = self.tts.sample_rate
@@ -249,6 +273,8 @@ class Orchestrator:
         ]
         if self.cfg.proactive.enabled:
             loops.append(("idle-loop", self._idle_loop, None))
+        if self._memory is not None:
+            loops.append(("reminder-loop", self._reminder_loop, None))
         self._tasks = [
             asyncio.create_task(self._supervise(name, fn, on_crash), name=name)
             for name, fn, on_crash in loops
@@ -537,7 +563,7 @@ class Orchestrator:
                 self.avatar.speech_chunk(
                     strip_speech_tags(text), extract_emotion_tags(text)
                 )
-            agen = self.tts.synthesize_stream(text)
+            agen = self.tts.synthesize_stream(soften_shouting(text))
             completed = False
             chunk_start: float | None = None   # when this chunk's audio is heard
             chunk_secs = 0.0
@@ -651,6 +677,9 @@ class Orchestrator:
         while not self._tts_queue.empty():
             with contextlib.suppress(asyncio.QueueEmpty):
                 self._tts_queue.get_nowait()
+        cancel_pending = getattr(self.tts, "cancel_pending", None)
+        if cancel_pending is not None:
+            cancel_pending()
         self.speaker.flush()
         self._play_end = 0.0
         # Words not yet heard never reach the transcript; mark the cut.
@@ -710,7 +739,8 @@ class Orchestrator:
             if returning:
                 hint = f"{hint}\n\n{returning}" if hint else returning
 
-            messages = self.convo.messages(hint, memory_block, self._tools_block)
+            messages = self.convo.messages(hint, memory_block, self._tools_block,
+                                           self._now_block())
             await self._speak_reply(messages, m, resuming=resuming)
         except asyncio.CancelledError:
             raise
@@ -790,21 +820,27 @@ class Orchestrator:
         # model responds to user turns but tends to parrot trailing system text.
         # No tools_block: a lead turn is for chit-chat, not for firing tools
         # (the model would otherwise blurt the time or set random reminders).
-        messages = self.convo.messages(None, None, None)
-        messages.append({"role": "user", "content": cue})
         self._turn_task = asyncio.create_task(
-            self._speak_reply(messages, m, temperature=p.lead_temperature,
-                              max_tokens=p.lead_max_tokens,
-                              unprompted=not greeting),
-            name="lead-turn",
-        )
+            self._run_lead_turn(cue, m, unprompted=not greeting), name="lead-turn")
+
+    async def _run_lead_turn(self, cue: str, m: TurnMetrics, unprompted: bool) -> None:
+        p = self.cfg.proactive
+        # What she knows about the user (no recall query: nothing was said),
+        # so a greeting can follow up on last time.
+        profile = await self._profile_block()
+        messages = self.convo.messages(None, profile, None, self._now_block())
+        messages.append({"role": "user", "content": cue})
+        await self._speak_reply(messages, m, temperature=p.lead_temperature,
+                                max_tokens=p.lead_max_tokens, unprompted=unprompted,
+                                tools_allowed=False)
 
     async def _speak_reply(self, messages: list[dict[str, str]],
                            m: TurnMetrics | None,
                            temperature: float | None = None,
                            max_tokens: int | None = None,
                            resuming: bool = False,
-                           unprompted: bool = False) -> None:
+                           unprompted: bool = False,
+                           tools_allowed: bool = True) -> None:
         """Stream the model's reply, speak it, and record it. Shared by
         user-driven and AI-led turns; barge-in cancellation records the
         partial so the resume feature can pick it back up. unprompted=True
@@ -817,7 +853,8 @@ class Orchestrator:
             try:
                 await self._stream_reply(messages, m, parts,
                                          temperature=temperature,
-                                         max_tokens=max_tokens)
+                                         max_tokens=max_tokens,
+                                         tools_allowed=tools_allowed)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -867,11 +904,12 @@ class Orchestrator:
     async def _stream_reply(self, messages: list[dict[str, str]],
                             m: TurnMetrics | None, out: list[str],
                             temperature: float | None = None,
-                            max_tokens: int | None = None) -> None:
+                            max_tokens: int | None = None,
+                            tools_allowed: bool = True) -> None:
         """Run the LLM with the skill/tool loop, pushing spoken chunks to the
         TTS queue and appending each to `out` so partial speech survives
         barge-in."""
-        chunker = SentenceChunker(self.cfg.chunker)
+        chunker = SentenceChunker(self._chunker_cfg)
         first_token = False
         spoke_final = False
         for _ in range(self.cfg.skills.max_tool_iters + 1):
@@ -879,8 +917,14 @@ class Orchestrator:
             head = ""                        # buffer until we can decide
             tool_text = ""
             raw = ""                         # everything streamed, for late tool detection
-            async for delta in self.llm.stream(messages, temperature=temperature,
-                                               max_tokens=max_tokens):
+            native_calls = None
+            kwargs = {"temperature": temperature, "max_tokens": max_tokens}
+            if self._tool_specs and tools_allowed:
+                kwargs["tools"] = self._tool_specs
+            async for delta in self.llm.stream(messages, **kwargs):
+                if isinstance(delta, ToolCallRequest):
+                    native_calls = delta     # native function calling: after the text
+                    continue
                 raw += delta
                 if not first_token:
                     first_token = True
@@ -890,7 +934,7 @@ class Orchestrator:
                     head += delta
                     if not head.lstrip():
                         continue
-                    decided = ("tool" if self._skills
+                    decided = ("tool" if self._skills and self._tool_specs is None
                                and looks_like_tool_call(head) else "speak")
                     if decided == "tool":
                         tool_text = head
@@ -904,10 +948,30 @@ class Orchestrator:
                     for chunk in chunker.push(delta):
                         out.append(await self._push_spoken(chunk, m))
 
+            if native_calls is not None and native_calls.calls:
+                # The model may have said something first ("Sure, one sec");
+                # that's already spoken. Run the tools, then loop for the reply.
+                for chunk in chunker.flush():
+                    out.append(await self._push_spoken(chunk, m))
+                messages = messages + [{
+                    "role": "assistant", "content": raw.strip() or None,
+                    "tool_calls": [
+                        {"id": cid, "type": "function",
+                         "function": {"name": name, "arguments": json.dumps(args)},
+                         **({"extra_content": extra} if extra else {})}
+                        for cid, name, args, extra in native_calls.calls],
+                }]
+                for cid, name, args, _extra in native_calls.calls:
+                    log.info("tool: %s %s", name, args)
+                    result = await self._skills.dispatch(name, args, self._skill_ctx())
+                    log.info("tool result: %s", result)
+                    messages.append({"role": "tool", "tool_call_id": cid, "content": result})
+                continue
+
             # Tool call at the start (decided=tool) OR buried after prose the
             # model spoke first (decided=speak but raw still holds valid JSON).
             call = None
-            if self._skills:
+            if self._skills and self._tool_specs is None:
                 call = parse_tool_call(tool_text if decided == "tool" else raw)
             if call is not None:
                 log.info("tool: %s %s", call.name, call.args)
@@ -946,11 +1010,12 @@ class Orchestrator:
             memory=self._memory,
             speak=self._speak,
             loop=asyncio.get_running_loop(),
+            clock=self.clock,
         )
 
     async def _speak(self, text: str) -> None:
         """Enqueue text for immediate TTS (used by timers firing later)."""
-        spoken = sanitize_for_speech(text, self.tts.supports_tags)
+        spoken = sanitize_for_speech(text, self.tts.supports_tags, self._mood_tags)
         if spoken:
             await self._enqueue_tts(spoken)
 
@@ -959,6 +1024,11 @@ class Orchestrator:
         later barge-in drops it before synthesis instead of voicing it late)
         and with the metrics of the turn it belongs to."""
         await self._tts_queue.put(_TTSItem(self.speaker.generation, text, m))
+        # Engines with several model copies start rendering right away, ahead
+        # of playback (same text the tts loop will ask for).
+        prepare = getattr(self.tts, "prepare", None)
+        if prepare is not None:
+            prepare(soften_shouting(text))
 
     async def _push_spoken(self, chunk: str, m: TurnMetrics | None) -> str:
         """Sanitize a chunk, enqueue it, and return it (with a trailing space)
@@ -968,7 +1038,7 @@ class Orchestrator:
         if self.avatar is not None:
             for name in extract_action_tags(chunk):
                 self.avatar.action(name)
-        spoken = sanitize_for_speech(chunk, self.tts.supports_tags)
+        spoken = sanitize_for_speech(chunk, self.tts.supports_tags, self._mood_tags)
         if not spoken or _is_instruction_echo(spoken):
             return ""
         if self._strip_reaction:
@@ -994,12 +1064,12 @@ class Orchestrator:
         try:
             qvec = await asyncio.to_thread(self._embedder.embed_query, text)
             exclude = self.cfg.llm.history_max_turns * 2  # already in live context
-            facts, summary, lines = await asyncio.to_thread(
+            facts, summary, entries = await asyncio.to_thread(
                 lambda: (
                     self._memory.facts_block(),
-                    self._memory.latest_summary(),
-                    self._memory.recall(qvec, self.cfg.memory.top_k,
-                                        self.cfg.memory.min_similarity, exclude),
+                    self._memory.latest_summary_entry(),
+                    self._memory.recall_entries(qvec, self.cfg.memory.top_k,
+                                                self.cfg.memory.min_similarity, exclude),
                 )
             )
             pvec = await asyncio.to_thread(self._embedder.embed_one, text)
@@ -1009,19 +1079,87 @@ class Orchestrator:
         except Exception:
             log.exception("memory recall/store failed")
             return None
-        parts: list[str] = []
-        if facts:
-            parts.append(f"What you know about {USER_NAME}:\n" + facts)
-        if summary:
-            parts.append("Summary of earlier conversation:\n" + summary)
-        if lines:
-            parts.append("Other things you remember that may be relevant:\n"
-                         + "\n".join(f"- {ln}" for ln in lines))
+        parts = self._profile_parts(facts, summary)
+        if entries:
+            now = self.clock.now()
+            # When it was said matters: "next Monday" from 2 weeks ago is past.
+            parts.append("Other things you remember that may be relevant:\n" + "\n".join(
+                f"- ({self.clock.ago(ts, now)}) {role}: {line}"
+                for ts, role, line in entries))
         if not parts:
             return None
         block = "\n\n".join(parts)
         return block[: self.cfg.memory.max_recall_chars] + \
             "\n(Use naturally if relevant; don't recite it.)"
+
+    def _profile_parts(self, facts: str, summary: tuple[str, float] | None) -> list[str]:
+        parts: list[str] = []
+        if facts:
+            parts.append(f"What you know about {USER_NAME}:\n" + facts)
+        if summary:
+            text, ts = summary
+            parts.append(f"Summary of earlier conversation (updated "
+                         f"{self.clock.ago(ts)}):\n{text}")
+        return parts
+
+    async def _profile_block(self) -> str | None:
+        """Facts + summary without a recall query (for unprompted turns)."""
+        if self._memory is None:
+            return None
+        try:
+            facts, summary = await asyncio.to_thread(
+                lambda: (self._memory.facts_block(), self._memory.latest_summary_entry()))
+        except Exception:
+            log.exception("memory read failed")
+            return None
+        parts = self._profile_parts(facts, summary)
+        if not parts:
+            return None
+        return ("\n\n".join(parts)[: self.cfg.memory.max_recall_chars]
+                + "\n(Use naturally if relevant; don't recite it.)")
+
+    def _now_block(self) -> str:
+        """Current date/time for the user, plus how long since the previous
+        conversation -- recomputed every turn, never stored in history."""
+        line = self.clock.now_line()
+        if self._last_seen_ts is not None:
+            line += (f" Your previous conversation with {self._user_label()} "
+                     f"(before this session) was {self.clock.ago(self._last_seen_ts)}.")
+        elif self._memory is not None:
+            line += f" This is your first conversation with {self._user_label()}."
+        return line
+
+    # -- reminders ---------------------------------------------------------
+
+    async def _reminder_loop(self) -> None:
+        """Deliver saved reminders when they're due. Ones that came due while
+        VCB was closed are delivered right after start, saying when they were."""
+        while True:
+            await asyncio.sleep(2.0)
+            try:
+                pending = await asyncio.to_thread(self._memory.pending_reminders)
+                now = time.time()
+                due = [r for r in pending if r[1] <= now]
+                if not due or self._snapshot().busy:
+                    continue                 # never talk over anyone; retry soon
+                for rid, due_ts, text in due:
+                    await self._announce_reminder(text, due_ts, now)
+                    await asyncio.to_thread(self._memory.mark_reminder_fired, rid)
+            except Exception:
+                log.exception("reminder check failed")
+
+    async def _announce_reminder(self, text: str, due_ts: float, now: float) -> None:
+        # No "Reminder:" prefix -- the speech sanitizer strips "Word:" openers
+        # (they're usually a model echoing a speaker label).
+        if now - due_ts > 120:               # missed (VCB was closed or busy)
+            msg = f"By the way, you had a reminder {self.clock.ago(due_ts)}: {text}."
+        else:
+            msg = f"Hey, here's your reminder: {text}."
+        log.info("reminder: %s", msg)
+        self.convo.add_assistant(msg)        # so the model knows it said this
+        self._last_activity = time.monotonic()
+        await self._speak(msg)
+        await self._tts_queue.put(_SENTINEL)
 
     async def _remember_assistant(self, text: str) -> None:
         if self._memory is None or self._embedder is None or not text:
@@ -1055,7 +1193,8 @@ class Orchestrator:
                 return
             prev = await asyncio.to_thread(self._memory.latest_summary)
             existing = await asyncio.to_thread(self._memory.facts)
-            summary, facts, remove = await consolidate(self.llm, prev, turns, existing)
+            summary, facts, remove = await consolidate(
+                self.llm, prev, turns, existing, clock=self.clock)
             if summary:
                 await asyncio.to_thread(
                     self._memory.add_summary, summary, turns[0][0], turns[-1][0]
