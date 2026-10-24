@@ -5,6 +5,8 @@ __pycache__/
 *.zip
 _ace_dl
 current_UNREAL_GRAPHS
+# private working notes
+VCB_Deep_Technical_Audit.md
 
 models
 logs
