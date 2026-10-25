@@ -54,6 +54,12 @@ def adapt_to_hardware(cfg: AppConfig, tts_engine: str, backend: str) -> str:
         log.warning("AMD GPU detected (ROCm): the voice runs on it; speech recognition "
                     "has no AMD GPU support and runs on the CPU.")
         _stt_to_cpu(cfg)
+        # AMD's torch links LLVM's OpenMP (libomp140) while CTranslate2 ships
+        # Intel's (libiomp5md); Intel's runtime aborts the process when it finds
+        # another one loaded ("OMP: Error #15") unless told to coexist. The two
+        # libraries never share a parallel region, so this is safe here.
+        # CTranslate2 only loads later (STT load), so the setting takes effect.
+        os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
         if tts_engine in _NVIDIA_ONLY_TTS:
             log.warning("TTS engine %r needs an NVIDIA GPU; using chatterbox-turbo "
                         "instead (it still clones your voice sample)", tts_engine)

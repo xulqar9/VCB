@@ -2,6 +2,7 @@
 presets), hardware fallback, Ollama model detection, audio device lookup."""
 
 import json
+import os
 
 import pytest
 
@@ -110,13 +111,16 @@ def test_gpu_keeps_requested_engine():
         adapt_to_hardware(cfg, "kokoro", backend="metal")
 
 
-def test_amd_gpu_keeps_voice_cloning_but_stt_on_cpu():
+def test_amd_gpu_keeps_voice_cloning_but_stt_on_cpu(monkeypatch):
     # ROCm torch: the voice gets the GPU, faster-whisper (CTranslate2) can't.
+    monkeypatch.delenv("KMP_DUPLICATE_LIB_OK", raising=False)
     cfg = AppConfig()
     assert adapt_to_hardware(cfg, "chatterbox-turbo", backend="rocm") == "chatterbox-turbo"
     assert cfg.tts.device == "cuda"
     assert cfg.stt.device == "cpu" and cfg.stt.model == cfg.stt.cpu_model
     assert cfg.stt.compute_type == cfg.stt.cpu_compute_type
+    # Lets CTranslate2's Intel OpenMP coexist with the LLVM OpenMP in AMD's torch.
+    assert os.environ["KMP_DUPLICATE_LIB_OK"] == "TRUE"
     # NVIDIA-only engines still clone the sample, through chatterbox.
     for engine in ("indextts", "orpheus"):
         assert adapt_to_hardware(AppConfig(), engine, backend="rocm") == "chatterbox-turbo"
