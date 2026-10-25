@@ -170,8 +170,10 @@ def test_missing_runtime_explains_how_to_install(tmp_path):
 
 def test_no_gpu_falls_back_to_kokoro():
     cfg = AppConfig()
-    assert adapt_to_hardware(cfg, "indextts", has_cuda=True) == "indextts"
-    assert adapt_to_hardware(cfg, "indextts", has_cuda=False) == "kokoro"
+    assert adapt_to_hardware(cfg, "indextts", backend="cuda") == "indextts"
+    assert adapt_to_hardware(cfg, "indextts", backend="cpu") == "kokoro"
+    # An AMD GPU can't run IndexTTS' CUDA runtime, but can still clone the voice.
+    assert adapt_to_hardware(AppConfig(), "indextts", backend="rocm") == "chatterbox-turbo"
 
 
 def test_chunker_overrides_keep_whole_sentences():

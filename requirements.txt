@@ -8,10 +8,13 @@
 #   1. PyTorch first, matching your hardware:
 #        NVIDIA GPU: pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 #        CPU only:   pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+#        AMD Radeon (Windows 11, supported models only): AMD's ROCm wheels, see
+#                    requirements-overrides-rocm.txt and scripts\launch.ps1
 #   2. uv pip install -r requirements.txt -c requirements-lock.txt --override requirements-overrides.txt
 #      (chatterbox-tts pins an older torch/newer transformers than we use; the
-#      overrides file resolves that. Plain pip has no overrides: use
-#      `pip install --no-deps chatterbox-tts` after the rest instead.)
+#      overrides file resolves that -- on AMD use requirements-overrides-rocm.txt.
+#      Plain pip has no overrides: use `pip install --no-deps chatterbox-tts`
+#      after the rest instead.)
 #   Optional TTS engines (xtts / orpheus / csm): requirements-extras.txt
 
 # Audio I/O

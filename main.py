@@ -38,7 +38,7 @@ import contextlib  # noqa: E402
 import logging  # noqa: E402
 
 from vcb.config import AppConfig, available_prompts, build_action_instructions, load_system_prompt  # noqa: E402
-from vcb.hardware import adapt_to_hardware, cuda_available, place_on_gpus  # noqa: E402
+from vcb.hardware import adapt_to_hardware, gpu_backend, place_on_gpus  # noqa: E402
 from vcb.llm import OpenAICompatLLM  # noqa: E402
 from vcb.orchestrator import Orchestrator, speaker_name  # noqa: E402
 from vcb.runtime import ManagedProcesses, setup_logging  # noqa: E402
@@ -163,8 +163,8 @@ def main() -> None:
         log.warning("%s=%r from this terminal's environment overrides .env (%r). "
                     "If you changed settings, open a new terminal or run VCB.bat.",
                     key, env_value, file_value)
-    has_cuda = cuda_available()
-    tts_engine = adapt_to_hardware(cfg, TTS_ENGINE, has_cuda)
+    backend = gpu_backend()
+    tts_engine = adapt_to_hardware(cfg, TTS_ENGINE, backend)
     # Engines that act moods (IndexTTS) teach the LLM their mood tags.
     cfg.llm.system_prompt += getattr(_TTS_ENGINES[tts_engine], "prompt_instructions", "")
     procs = ManagedProcesses(cfg)
@@ -172,7 +172,7 @@ def main() -> None:
         procs.start_server()                 # blocks until the backend is ready
         # The LLM is loaded now, so free GPU memory is what's really left for
         # speech recognition and the voice.
-        place_on_gpus(cfg, tts_engine, has_cuda)
+        place_on_gpus(cfg, tts_engine, backend)
         procs.start_transcript_window(transcript, speaker_name(cfg.llm.system_prompt))
         asyncio.run(amain(cfg, tts_engine, transcript))
     except KeyboardInterrupt:

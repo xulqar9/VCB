@@ -1,17 +1,19 @@
 # VCB launcher. Run through VCB.bat (double-click) -- no Python install needed.
 #
 # First run: downloads uv (a small, fast Python package manager), a private
-# Python 3.12, the right PyTorch build for this PC (NVIDIA CUDA or CPU), and all
-# VCB dependencies into .runtime\ next to this repo, then opens the settings
-# window. Later runs start VCB straight away; dependencies are only reinstalled
-# when the requirements files change. Choosing the IndexTTS voice adds its own
-# isolated environment (.runtime\indextts), installed on the next start.
-# Delete .runtime\ to uninstall all of it.
+# Python 3.12, the right PyTorch build for this PC (NVIDIA CUDA, AMD ROCm or
+# CPU), and all VCB dependencies into .runtime\ next to this repo, then opens
+# the settings window. Later runs start VCB straight away; dependencies are
+# only reinstalled when the requirements files change. Choosing the IndexTTS
+# voice adds its own isolated environment (.runtime\indextts), installed on
+# the next start. Delete .runtime\ to uninstall all of it.
 #
 # Launcher switches (anything else is passed through to main.py):
 #   --settings   open the settings window and exit
 #   --extras     also install the optional TTS engines (xtts / orpheus / csm)
 #   --reinstall  force a clean dependency reinstall
+# Environment:
+#   VCB_TORCH_FLAVOR=cu128|rocm|cpu   force the PyTorch build instead of detecting
 
 # Native tools report failure via exit codes (checked below); "Stop" would turn
 # their harmless stderr output into terminating errors on Windows PowerShell.
@@ -25,6 +27,18 @@ $Venv = Join-Path $Runtime "venv"
 $Py = Join-Path $Venv "Scripts\python.exe"
 $Stamp = Join-Path $Runtime "installed.txt"
 $TorchVersion = "2.7.1"
+# AMD Radeon: AMD publishes its Windows PyTorch builds only on repo.radeon.com
+# (Python 3.12). The torch/torchaudio wheel URLs live in
+# requirements-overrides-rocm.txt; these are the ROCm runtime they need.
+$RocmTorchVersion = "2.9.1"
+$RocmRelease = "7.2.1"
+$RocmBase = "https://repo.radeon.com/rocm/windows/rocm-rel-$RocmRelease"
+$RocmRuntime = @(
+    "rocm-sdk-core @ $RocmBase/rocm_sdk_core-$RocmRelease-py3-none-win_amd64.whl",
+    "rocm-sdk-devel @ $RocmBase/rocm_sdk_devel-$RocmRelease-py3-none-win_amd64.whl",
+    "rocm-sdk-libraries-custom @ $RocmBase/rocm_sdk_libraries_custom-$RocmRelease-py3-none-win_amd64.whl",
+    "rocm[libraries,devel] @ $RocmBase/rocm-$RocmRelease.tar.gz"
+)
 
 $SettingsOnly = $false; $Extras = $false; $Reinstall = $false
 $Pass = @()
@@ -95,27 +109,58 @@ if (-not (Test-Path (Join-Path $Root ".env"))) {
 }
 
 # -- dependencies -------------------------------------------------------------
+# PyTorch build: NVIDIA -> CUDA; a Radeon that AMD supports with PyTorch on
+# Windows (Windows 11 only) -> AMD's ROCm build, so the voice runs on the GPU
+# (speech recognition has no AMD build and stays on the CPU); otherwise CPU.
 $HasNvidia = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
 if (-not $HasNvidia) { $HasNvidia = Test-Path "$env:SystemRoot\System32\nvidia-smi.exe" }
-$Flavor = if ($HasNvidia) { "cu128" } else { "cpu" }
+function Get-RocmGpu {
+    # Keep the model list in step with vcb\gpu.py (rocm_supported).
+    $names = try { @((Get-CimInstance Win32_VideoController -ErrorAction Stop).Name) } catch { @() }
+    foreach ($n in $names) {
+        if ($n -match 'Radeon' -and
+            $n -match '\bRX 9070( XT)?\b|\bRX 9060 XT\b|\bAI PRO R9700\b|\bRX 7900 XTX\b|\bPRO W7900\b|\bRX 7700\b(?! XT)') {
+            return $n
+        }
+    }
+    return $null
+}
+$AmdGpu = if ($HasNvidia) { $null } else { Get-RocmGpu }
+$IsWin11 = [Environment]::OSVersion.Version.Build -ge 22000
+if ($env:VCB_TORCH_FLAVOR) {
+    $Flavor = $env:VCB_TORCH_FLAVOR
+    if ($Flavor -notin @("cu128", "rocm", "cpu")) { Fail "VCB_TORCH_FLAVOR must be cu128, rocm or cpu (got '$Flavor')" }
+} elseif ($HasNvidia) { $Flavor = "cu128" }
+elseif ($AmdGpu -and $IsWin11) { $Flavor = "rocm" }
+else {
+    if ($AmdGpu) { Write-Host "$AmdGpu found, but AMD's PyTorch build needs Windows 11: CPU mode." -ForegroundColor Yellow }
+    $Flavor = "cpu"
+}
+$Overrides = if ($Flavor -eq "rocm") { "requirements-overrides-rocm.txt" } else { "requirements-overrides.txt" }
+$WantTorch = if ($Flavor -eq "rocm") { $RocmTorchVersion } else { $TorchVersion }
 $Previous = if (Test-Path $Stamp) { (Get-Content $Stamp -Raw).Trim() } else { "" }
 $ExtrasWanted = $Extras -or ($Previous -match "extras=True")
 
-$reqFiles = @("requirements.txt", "requirements-lock.txt", "requirements-overrides.txt")
+$reqFiles = @("requirements.txt", "requirements-lock.txt", $Overrides)
 if ($ExtrasWanted) { $reqFiles += "requirements-extras.txt" }
 $hash = ($reqFiles | ForEach-Object { (Get-FileHash (Join-Path $Root $_) -Algorithm SHA256).Hash }) -join ""
-$want = "torch=$TorchVersion+$Flavor`nextras=$ExtrasWanted`nreqs=$hash"
+$want = "torch=$WantTorch+$Flavor`nextras=$ExtrasWanted`nreqs=$hash"
 
 if ($Previous -ne $want) {
-    if ($HasNvidia) { Step "Installing VCB dependencies for your NVIDIA GPU (first run downloads ~5 GB, please wait)" }
-    else { Step "Installing VCB dependencies (no NVIDIA GPU found: CPU mode; first run downloads ~1.5 GB)" }
+    switch ($Flavor) {
+        "cu128" { Step "Installing VCB dependencies for your NVIDIA GPU (first run downloads ~5 GB, please wait)" }
+        "rocm"  { Step "Installing VCB dependencies for your AMD GPU ($(if ($AmdGpu) { $AmdGpu } else { 'VCB_TORCH_FLAVOR=rocm' }); first run downloads ~4 GB, please wait)" }
+        default { Step "Installing VCB dependencies (no supported GPU found: CPU mode; first run downloads ~1.5 GB)" }
+    }
     $common = @(
         "pip", "install", "--python", $Py,
         "-c", (Join-Path $Root "requirements-lock.txt"),
-        "--override", (Join-Path $Root "requirements-overrides.txt"),
-        "--extra-index-url", "https://download.pytorch.org/whl/$Flavor",
+        "--override", (Join-Path $Root $Overrides),
         "--index-strategy", "unsafe-best-match"
     )
+    # AMD's wheels are fetched by URL (from the overrides file); the PyTorch
+    # index only serves the CUDA and CPU builds for Windows.
+    if ($Flavor -ne "rocm") { $common += @("--extra-index-url", "https://download.pytorch.org/whl/$Flavor") }
     # Antivirus scanners briefly lock freshly downloaded files, which can make
     # uv's cache rename fail ("Access is denied"). uv keeps what it already
     # fetched, so simply retrying gets past it.
@@ -127,7 +172,9 @@ if ($Previous -ne $want) {
         }
         return $false
     }
-    if (-not (Invoke-UvInstall "torch==$TorchVersion" "torchaudio==$TorchVersion" -r (Join-Path $Root "requirements.txt"))) {
+    $torchReqs = @("torch==$TorchVersion", "torchaudio==$TorchVersion")
+    if ($Flavor -eq "rocm") { $torchReqs = $RocmRuntime + @("torch", "torchaudio") }
+    if (-not (Invoke-UvInstall @torchReqs -r (Join-Path $Root "requirements.txt"))) {
         Fail "dependency install failed (see above). Re-run VCB.bat to retry; if it keeps failing, temporarily pause your antivirus or exclude this folder."
     }
     if ($ExtrasWanted) {
@@ -176,7 +223,8 @@ function Ensure-IndexTTS {
     $want = "commit=$IndexCommit"
     if ((Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq $want)) { return }
     if (-not $HasNvidia) {
-        Write-Host "IndexTTS needs an NVIDIA GPU; VCB will use the Kokoro voice instead." -ForegroundColor Yellow
+        if ($Flavor -eq "rocm") { Write-Host "IndexTTS needs an NVIDIA GPU; VCB will clone your voice with Chatterbox instead." -ForegroundColor Yellow }
+        else { Write-Host "IndexTTS needs an NVIDIA GPU; VCB will use the Kokoro preset voice instead." -ForegroundColor Yellow }
         return
     }
     Step "Installing the IndexTTS voice engine (one-time, ~8 GB download, please wait)"

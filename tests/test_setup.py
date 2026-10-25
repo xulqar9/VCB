@@ -94,7 +94,7 @@ def test_public_defaults_are_generic():
 
 def test_cpu_fallback_switches_to_light_models():
     cfg = AppConfig()
-    engine = adapt_to_hardware(cfg, "chatterbox-turbo", has_cuda=False)
+    engine = adapt_to_hardware(cfg, "chatterbox-turbo", backend="cpu")
     assert engine == "kokoro"
     assert cfg.stt.device == "cpu" and cfg.stt.model == cfg.stt.cpu_model
     assert cfg.tts.device == "cpu"
@@ -102,10 +102,48 @@ def test_cpu_fallback_switches_to_light_models():
 
 def test_gpu_keeps_requested_engine():
     cfg = AppConfig()
-    assert adapt_to_hardware(cfg, "chatterbox-turbo", has_cuda=True) == "chatterbox-turbo"
+    assert adapt_to_hardware(cfg, "chatterbox-turbo", backend="cuda") == "chatterbox-turbo"
     assert cfg.stt.device == "cuda"
     with pytest.raises(ValueError):
-        adapt_to_hardware(cfg, "nope", has_cuda=True)
+        adapt_to_hardware(cfg, "nope", backend="cuda")
+    with pytest.raises(ValueError):
+        adapt_to_hardware(cfg, "kokoro", backend="metal")
+
+
+def test_amd_gpu_keeps_voice_cloning_but_stt_on_cpu():
+    # ROCm torch: the voice gets the GPU, faster-whisper (CTranslate2) can't.
+    cfg = AppConfig()
+    assert adapt_to_hardware(cfg, "chatterbox-turbo", backend="rocm") == "chatterbox-turbo"
+    assert cfg.tts.device == "cuda"
+    assert cfg.stt.device == "cpu" and cfg.stt.model == cfg.stt.cpu_model
+    assert cfg.stt.compute_type == cfg.stt.cpu_compute_type
+    # NVIDIA-only engines still clone the sample, through chatterbox.
+    for engine in ("indextts", "orpheus"):
+        assert adapt_to_hardware(AppConfig(), engine, backend="rocm") == "chatterbox-turbo"
+    for engine in ("kokoro", "xtts", "csm"):
+        assert adapt_to_hardware(AppConfig(), engine, backend="rocm") == engine
+
+
+def test_gpu_backend_distinguishes_rocm(monkeypatch):
+    import sys
+    import types
+
+    from vcb import hardware
+
+    def fake_torch(available: bool, hip: str | None):
+        torch = types.ModuleType("torch")
+        torch.cuda = types.SimpleNamespace(is_available=lambda: available)
+        torch.version = types.SimpleNamespace(hip=hip, cuda=None if hip else "12.8")
+        return torch
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch(True, None))
+    assert hardware.gpu_backend() == "cuda"
+    monkeypatch.setitem(sys.modules, "torch", fake_torch(True, "7.2.53211"))
+    assert hardware.gpu_backend() == "rocm"
+    monkeypatch.setitem(sys.modules, "torch", fake_torch(False, "7.2.53211"))
+    assert hardware.gpu_backend() == "cpu"
+    monkeypatch.setitem(sys.modules, "torch", None)          # import fails
+    assert hardware.gpu_backend() == "cpu"
 
 
 # -- ollama -------------------------------------------------------------------

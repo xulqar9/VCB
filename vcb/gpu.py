@@ -7,12 +7,14 @@ room left for other apps, so the LLM's budget is:
 
 Figures below were measured on an RTX 5060 Ti / 3090 Ti; the per-model VRAM
 estimate is calibrated against Ollama's own reported usage at VCB's 8k context.
-Uses nvidia-smi only (no torch), so it works in the settings window before the
-heavy dependencies are installed.
+Uses nvidia-smi / Windows' adapter list only (no torch), so it works in the
+settings window before the heavy dependencies are installed.
 """
 
+import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,17 +98,93 @@ def detect_gpus() -> list[GPU]:
     return parse_nvidia_smi(out)
 
 
-def speech_vram_gb(tts_engine: str) -> float:
-    return STT_VRAM_GB + TTS_VRAM_GB.get(tts_engine, TTS_VRAM_DEFAULT_GB)
+# -- AMD Radeon (ROCm) -------------------------------------------------------
+# Radeon models AMD ships PyTorch-on-Windows (ROCm 7.2.1) builds for; the
+# launcher installs that build for them so the voice runs on the GPU. gfx1200
+# (RX 9060 XT), gfx1201 (RX 9070 / 9070 XT / AI PRO R9700), gfx1100 (RX 7900
+# XTX / PRO W7900), gfx1101 (RX 7700). Windows 11 only.
+_ROCM_WINDOWS_GPUS = re.compile(
+    r"\bRX 9070( XT)?\b|\bRX 9060 XT\b|\bAI PRO R9700\b|\bRX 7900 XTX\b|"
+    r"\bPRO W7900\b|\bRX 7700\b(?! XT)"
+)
+_DISPLAY_CLASS_KEY = (r"SYSTEM\CurrentControlSet\Control\Class"
+                      r"\{4d36e968-e325-11ce-bfc1-08002be10318}")
 
 
-def llm_budget_gb(gpus: list[GPU], tts_engine: str, reserve_gb: float) -> float:
+def rocm_supported(gpu_name: str) -> bool:
+    """Whether AMD's Windows PyTorch build supports this Radeon."""
+    return "Radeon" in gpu_name and _ROCM_WINDOWS_GPUS.search(gpu_name) is not None
+
+
+def _present_adapters() -> list[str]:
+    """Display adapters Windows sees right now (Win32_VideoController)."""
+    if sys.platform != "win32":
+        return []
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "(Get-CimInstance Win32_VideoController).Name"],
+            capture_output=True, text=True, timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _registry_vram_gb() -> dict[str, float]:
+    """Total memory per adapter name from the display driver's registry entry
+    (WMI's AdapterRAM is a 32-bit field and caps at 4 GB). The registry also
+    keeps entries of cards that were removed, so only use it for lookups."""
+    if sys.platform != "win32":
+        return {}
+    import winreg
+
+    vram: dict[str, float] = {}
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _DISPLAY_CLASS_KEY) as cls:
+            for i in range(64):
+                try:
+                    sub = winreg.EnumKey(cls, i)
+                except OSError:
+                    break
+                try:
+                    with winreg.OpenKey(cls, sub) as dev:
+                        name, _ = winreg.QueryValueEx(dev, "DriverDesc")
+                        size, _ = winreg.QueryValueEx(dev, "HardwareInformation.qwMemorySize")
+                except OSError:
+                    continue
+                if isinstance(size, int) and size > 0:
+                    vram[name] = round(size / 2**30, 1)
+    except OSError:
+        pass
+    return vram
+
+
+def detect_amd_gpus() -> list[GPU]:
+    """AMD Radeon GPUs present (Windows only); total_gb is 0.0 if unknown."""
+    names = [n for n in _present_adapters() if "Radeon" in n or n.startswith("AMD")]
+    if not names:
+        return []
+    vram = _registry_vram_gb()
+    return [GPU(n, vram.get(n, 0.0)) for n in names]
+
+
+def speech_vram_gb(tts_engine: str, stt_on_gpu: bool = True) -> float:
+    """GPU memory of VCB's speech stack. On AMD, speech recognition has no GPU
+    build and runs on the CPU, so only the voice counts (stt_on_gpu=False)."""
+    tts = TTS_VRAM_GB.get(tts_engine, TTS_VRAM_DEFAULT_GB)
+    return STT_VRAM_GB + tts if stt_on_gpu else tts
+
+
+def llm_budget_gb(gpus: list[GPU], tts_engine: str, reserve_gb: float,
+                  stt_on_gpu: bool = True) -> float:
     """GPU memory left for the LLM. Ollama can split a model over several
     GPUs, so their memory adds up (one fast GPU is still better)."""
     if not gpus:
         return 0.0
     total = sum(g.total_gb for g in gpus)
-    return round(max(0.0, total - speech_vram_gb(tts_engine) - reserve_gb), 1)
+    return round(max(0.0, total - speech_vram_gb(tts_engine, stt_on_gpu) - reserve_gb), 1)
 
 
 def recommend(budget_gb: float,

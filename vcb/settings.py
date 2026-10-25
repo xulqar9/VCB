@@ -19,8 +19,8 @@ from .clock import Clock, list_timezones, valid_timezone
 from .config import ENV_FILE, USER_DIR, available_prompts, resolve_path
 from .envfile import read_env, update_env
 from .gpu import (
-    DEFAULT_RESERVE_GB, OLLAMA_CHOICES, ModelChoice, detect_gpus, estimate_vram_gb,
-    llm_budget_gb, recommend, speech_vram_gb,
+    DEFAULT_RESERVE_GB, OLLAMA_CHOICES, ModelChoice, detect_amd_gpus, detect_gpus,
+    estimate_vram_gb, llm_budget_gb, recommend, rocm_supported, speech_vram_gb,
 )
 
 DEFAULT_LABEL = "System default"
@@ -159,7 +159,11 @@ class SettingsWindow:
 
         self.ollama_box = self._group()
         self.ollama_base = get("VCB_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
-        self.gpus = detect_gpus()
+        self.gpus = detect_gpus()                      # NVIDIA (nvidia-smi)
+        # Like the launcher, an NVIDIA GPU wins; otherwise a Radeon that AMD's
+        # Windows PyTorch build supports runs the voice (not speech recognition).
+        self.amd_gpus = detect_amd_gpus() if not self.gpus else []
+        self.rocm_gpus = [g for g in self.amd_gpus if rocm_supported(g.name)]
         installed = _ollama_installed_models(self.ollama_base)
         known = {c.tag for c in OLLAMA_CHOICES}
         self.model_choices = list(OLLAMA_CHOICES) + [c for c in installed if c.tag not in known]
@@ -368,7 +372,7 @@ class SettingsWindow:
         else:
             self.indextts_box.grid_remove()
         self.engine_info.config(text=self._engine_description(engine), foreground="gray")
-        if engine == "indextts" and not self.gpus:
+        if engine != "kokoro" and not self.gpus and not (self.rocm_gpus and engine != "indextts"):
             self.engine_info.config(foreground="#b06000")
         if backend == "ollama":
             self._update_models()
@@ -387,24 +391,32 @@ class SettingsWindow:
     def _engine_description(self, engine: str) -> str:
         about = VOICE_ENGINES.get(engine, ("", "Optional engine (see README)."))[1]
         if engine == "indextts":
-            if not self.gpus:
+            if self.rocm_gpus:
+                about += ("\nAMD GPU: IndexTTS needs NVIDIA, so VCB would clone your "
+                          "voice with the fast (Chatterbox) option instead.")
+            elif not self.gpus:
                 about += "\nNo NVIDIA GPU found: VCB would fall back to the preset voice."
             elif Path(resolve_path(INDEXTTS_STAMP)).is_file():
                 about += "\nInstalled."
             else:
                 about += ("\nNot installed yet: the next VCB start downloads and sets it "
                           "up (one-time, ~8 GB, a few minutes).")
+        elif engine != "kokoro" and not self.gpus and not self.rocm_gpus:
+            about += ("\nNo NVIDIA or supported AMD GPU found: voice cloning needs one, so "
+                      "VCB would use the preset voice and ignore your voice sample.")
         return about
 
     def _budget(self) -> float | None:
-        """GPU memory left for the LLM, or None without an NVIDIA GPU."""
-        if not self.gpus:
+        """GPU memory left for the LLM, or None without a usable GPU (or when
+        its memory can't be read)."""
+        gpus = self.gpus or self.rocm_gpus
+        if not gpus or any(g.total_gb <= 0 for g in gpus):
             return None
         try:
             reserve = float(self.reserve.get())
         except ValueError:
             reserve = DEFAULT_RESERVE_GB
-        return llm_budget_gb(self.gpus, self.engine.get(), reserve)
+        return llm_budget_gb(gpus, self.engine.get(), reserve, stt_on_gpu=bool(self.gpus))
 
     def _update_models(self) -> None:
         """Re-label the model list (fits / too big) for the current voice
@@ -426,16 +438,28 @@ class SettingsWindow:
         self.ollama_model.set(by_tag.get(current, current))
         self.recommended = best
 
-        speech = speech_vram_gb(self.engine.get())
+        speech = speech_vram_gb(self.engine.get(), stt_on_gpu=bool(self.gpus))
         if budget is None:
-            self.gpu_info.config(
-                foreground="#b06000",
-                text="No NVIDIA GPU found: a local model would run on the CPU and "
-                     "answer slowly. The Cloud API option is recommended.")
+            if self.rocm_gpus:
+                text = (f"{self.rocm_gpus[0].name} found, but its memory couldn't be read. "
+                        f"Pick a model that leaves ~{speech:.0f} GB free for the voice.")
+            elif self.amd_gpus:
+                text = (f"{self.amd_gpus[0].name} found, but AMD's PyTorch build doesn't "
+                        "support it: VCB runs on the CPU with the preset voice. "
+                        "The Cloud API option is recommended.")
+            else:
+                text = ("No NVIDIA or supported AMD GPU found: a local model would run on "
+                        "the CPU and answer slowly. The Cloud API option is recommended.")
+            self.gpu_info.config(foreground="#b06000", text=text)
             return
-        gpus = " + ".join(f"{g.name} ({g.total_gb:.0f} GB)" for g in self.gpus)
-        text = (f"{gpus}. VCB's speech recognition + voice use ~{speech:.1f} GB, "
-                f"leaving ~{budget:.1f} GB for the model.")
+        gpus = " + ".join(f"{g.name} ({g.total_gb:.0f} GB)"
+                          for g in (self.gpus or self.rocm_gpus))
+        if self.gpus:
+            uses = f"VCB's speech recognition + voice use ~{speech:.1f} GB"
+        else:
+            uses = (f"VCB's voice uses ~{speech:.1f} GB (speech recognition runs on the "
+                    "CPU on AMD)")
+        text = f"{gpus}. {uses}, leaving ~{budget:.1f} GB for the model."
         if best is None:
             options = ("switch to the Preset voice (frees ~4 GB) or use the Cloud API option."
                        if self.engine.get() != "kokoro" else "use the Cloud API option.")

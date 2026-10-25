@@ -101,13 +101,13 @@ def test_place_on_gpus_sets_devices(monkeypatch):
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     monkeypatch.setattr(gpu, "query_free_gb", lambda: {0: 9.6, 1: 7.2})
     cfg = AppConfig()
-    hardware.place_on_gpus(cfg, "chatterbox-turbo", has_cuda=True)
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", backend="cuda")
     assert cfg.tts.device == "cuda:0" and cfg.stt.device_index == 1
 
     # With CUDA_VISIBLE_DEVICES=1,0 the physical GPU 1 is CUDA's index 0.
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1,0")
     cfg = AppConfig()
-    hardware.place_on_gpus(cfg, "chatterbox-turbo", has_cuda=True)
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", backend="cuda")
     assert cfg.tts.device == "cuda:1" and cfg.stt.device_index == 0
 
 
@@ -118,15 +118,41 @@ def test_place_on_gpus_respects_single_gpu_and_explicit_devices(monkeypatch):
     monkeypatch.setattr(gpu, "query_free_gb", lambda: {0: 9.6, 1: 7.2})
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")        # user pinned one GPU
     cfg = AppConfig()
-    hardware.place_on_gpus(cfg, "chatterbox-turbo", has_cuda=True)
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", backend="cuda")
     assert cfg.tts.device == "cuda" and cfg.stt.device_index == 0
 
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES")
     cfg = AppConfig()
     cfg.tts.device = "cuda:1"                                # explicit choice wins
-    hardware.place_on_gpus(cfg, "chatterbox-turbo", has_cuda=True)
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", backend="cuda")
     assert cfg.tts.device == "cuda:1"
 
     cfg = AppConfig()
-    hardware.place_on_gpus(cfg, "chatterbox-turbo", has_cuda=False)
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", backend="cpu")
     assert cfg.tts.device == "cuda"
+
+    cfg = AppConfig()                                        # nvidia-smi placement is NVIDIA-only
+    hardware.place_on_gpus(cfg, "chatterbox-turbo", backend="rocm")
+    assert cfg.tts.device == "cuda" and cfg.stt.device_index == 0
+
+
+def test_rocm_supported_matches_amd_windows_list():
+    from vcb.gpu import rocm_supported
+
+    for name in ("AMD Radeon RX 9060 XT", "AMD Radeon RX 9070", "AMD Radeon RX 9070 XT",
+                 "AMD Radeon AI PRO R9700", "AMD Radeon RX 7900 XTX",
+                 "AMD Radeon PRO W7900 Dual Slot", "AMD Radeon RX 7700"):
+        assert rocm_supported(name), name
+    for name in ("AMD Radeon RX 6800 XT", "AMD Radeon RX 7800 XT", "AMD Radeon RX 7700 XT",
+                 "AMD Radeon RX 7900 XT", "AMD Radeon(TM) Graphics",
+                 "NVIDIA GeForce RTX 5060 Ti", "Intel(R) Arc(TM) A770 Graphics"):
+        assert not rocm_supported(name), name
+
+
+def test_amd_budget_counts_only_the_voice():
+    # Speech recognition has no AMD GPU build, so it doesn't take GPU memory.
+    gpus = [GPU("AMD Radeon RX 9060 XT", 16.0)]
+    assert speech_vram_gb("chatterbox-turbo", stt_on_gpu=False) == 4.7
+    assert llm_budget_gb(gpus, "chatterbox-turbo", 2, stt_on_gpu=False) == round(16 - 4.7 - 2, 1)
+    assert llm_budget_gb(gpus, "chatterbox-turbo", 2) < llm_budget_gb(gpus, "chatterbox-turbo", 2,
+                                                                        stt_on_gpu=False)

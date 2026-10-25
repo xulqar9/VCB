@@ -113,7 +113,8 @@ kept free. VCB runs Ollama models with an
 ## 🗣️ Voices
 
 - **Clone a voice — fast (Chatterbox)** — pick a 5–15 s `.wav` of clean speech
-  in the settings. No file? It uses a pleasant built-in voice.
+  in the settings. No file? It uses a pleasant built-in voice. Needs an NVIDIA
+  GPU or a [supported AMD Radeon](#-requirements).
 - **Clone a voice — emotional (IndexTTS-2.5)** — your voice sample, plus real
   emotion: the assistant tags each sentence with a mood (`<excited>`,
   `<playful>`, `<sad>`, `<angry>`, `<surprised>`, …) and the voice acts it. The
@@ -135,7 +136,7 @@ kept free. VCB runs Ollama models with an
 | | Minimum | Recommended |
 |---|---|---|
 | **OS** | Windows 10 / 11 | Windows 11 |
-| **GPU** | none (CPU mode: slower, preset voice) | NVIDIA, **8 GB VRAM** with a cloud brain, **16 GB** fully local |
+| **GPU** | none (CPU mode: slower, preset voice) | NVIDIA, **8 GB VRAM** with a cloud brain, **16 GB** fully local. AMD: RX 9070 / 9070 XT / 9060 XT, AI PRO R9700, RX 7900 XTX, PRO W7900, RX 7700 on Windows 11 (see FAQ) |
 | **Disk** | ~10 GB | ~15 GB (+ your Ollama models) |
 | **Internet** | for the first-time download | — fully offline afterwards with Ollama |
 
@@ -250,11 +251,28 @@ platform.openai.com, or switch to Google Gemini's free tier in the settings.
 </details>
 
 <details>
+<summary><b>I have an AMD GPU</b></summary>
+
+If it's one AMD supports with PyTorch on Windows — **Radeon RX 9070 / 9070 XT /
+9060 XT, AI PRO R9700, RX 7900 XTX, PRO W7900, RX 7700** — on **Windows 11**
+with a current Adrenalin driver, `VCB.bat` installs AMD's ROCm build of PyTorch
+and the voice (including cloning) runs on the GPU. Speech recognition has no AMD
+GPU build and runs on the CPU with a smaller model. IndexTTS and Orpheus are
+NVIDIA-only; if you pick them VCB clones your voice with Chatterbox instead.
+
+Other Radeons (RX 6000 series, RX 7800 XT, RX 7900 XT, …) run in CPU mode with
+the preset voice. To try AMD's build on an unlisted card anyway (unsupported;
+may crash): set `VCB_TORCH_FLAVOR=rocm` and run `VCB.bat --reinstall`.
+Switching GPUs? `VCB.bat --reinstall` picks the matching PyTorch again.
+</details>
+
+<details>
 <summary><b>I don't have an NVIDIA GPU</b></summary>
 
 VCB still works: it automatically switches to a smaller speech-recognition
-model and the Kokoro preset voice on the CPU. Pair it with a cloud brain for
-the best experience. Responses will be slower than with a GPU.
+model and the Kokoro preset voice on the CPU (your voice sample isn't used —
+cloning needs a GPU). Pair it with a cloud brain for the best experience.
+Responses will be slower than with a GPU.
 </details>
 
 <details>
