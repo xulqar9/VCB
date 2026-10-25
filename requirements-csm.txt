@@ -1,0 +1,4 @@
+# Voice engine pack: Sesame CSM-1B (transformers, Mimi codec). Installed by
+# the launcher when selected; the model (~2.5 GB) downloads on the first start
+# from the ungated unsloth/csm-1b mirror (see TTSConfig.csm_model_id).
+librosa

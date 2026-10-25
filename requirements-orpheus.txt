@@ -1,0 +1,17 @@
+# Voice engine pack: Orpheus (3B llama.cpp model, preset voices with natural
+# laughs/sighs). NVIDIA only. Installed by the launcher when selected; the
+# model (~2.5 GB) downloads on the first start.
+#
+# llama-cpp-python from PyPI is source-only (needs Visual Studio + the CUDA
+# toolkit to build). abetlen publishes prebuilt Windows wheels per CUDA
+# version on GitHub; the CUDA 13.0 build runs on every current NVIDIA GPU
+# (the CUDA 12.4 one has no kernels for RTX 50-series) and needs NVIDIA
+# driver 580 or newer. It links cublas64_13.dll, which the nvidia-cublas 13.x
+# wheel provides (nvidia\cu13\bin\x86_64, see vcb\tts\orpheus_tts.py).
+llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.36-cu130/llama_cpp_python-0.3.36-py3-none-win_amd64.whl
+nvidia-cublas==13.8.0.4
+nvidia-cuda-runtime==13.4.92
+orpheus-cpp
+# Orpheus' SNAC vocoder needs a CUDA-12 onnxruntime; plain `onnxruntime`
+# (pulled in by fastembed) shadows it, so the launcher removes that one.
+onnxruntime-gpu==1.20.2

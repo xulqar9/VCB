@@ -1,0 +1,4 @@
+# Voice engine pack: Coqui XTTS v2 (clones your .wav). Installed by the
+# launcher when selected; the model (~2 GB) downloads on the first start.
+coqui-tts
+librosa

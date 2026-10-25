@@ -23,28 +23,35 @@ log = logging.getLogger("vcb.tts.orpheus")
 
 
 def _register_cuda_dlls() -> None:
-    """ggml-cuda.dll (from llama-cpp-python) needs cudart64_12.dll / cublas64_12.dll.
-    torch's cu124 build bundles them, plus the nvidia-* wheels. Add those folders
-    to the DLL search path on Windows before importing llama_cpp.
+    """ggml-cuda.dll (from llama-cpp-python's CUDA 13 build) needs
+    cublas64_13.dll from the nvidia-cublas wheel (nvidia\\cu13\\bin\\x86_64);
+    the SNAC vocoder's onnxruntime-gpu needs the CUDA 12 cuBLAS/cuDNN DLLs
+    from torch and the nvidia-*-cu12 wheels. Add all of those folders to the
+    DLL search path on Windows before importing llama_cpp.
     """
     if sys.platform != "win32":
         return
-    site = Path(__file__).resolve().parents[2] / ".venv" / "Lib" / "site-packages"
-    candidates = [
-        site / "torch" / "lib",
-        site / "nvidia" / "cublas" / "bin",
-        site / "nvidia" / "cuda_runtime" / "bin",
-        site / "nvidia" / "cuda_nvrtc" / "bin",
-        site / "nvidia" / "cudnn" / "bin",
-    ]
-    for path in candidates:
-        if path.is_dir():
+    import site
+
+    for base in map(Path, site.getsitepackages()):
+        candidates = [
+            base / "nvidia" / "cu13" / "bin" / "x86_64",
+            base / "nvidia" / "cu13" / "bin",
+            base / "torch" / "lib",
+            base / "nvidia" / "cublas" / "bin",
+            base / "nvidia" / "cuda_runtime" / "bin",
+            base / "nvidia" / "cuda_nvrtc" / "bin",
+            base / "nvidia" / "cudnn" / "bin",
+        ]
+        for path in candidates:
+            if not path.is_dir():
+                continue
             try:
                 os.add_dll_directory(str(path))
             except OSError:
                 pass
-            # ggml-cuda.dll resolves cudart64_12.dll via the legacy PATH search,
-            # so prepend as well (add_dll_directory alone isn't enough here).
+            # ggml-cuda.dll resolves its DLLs via the legacy PATH search, so
+            # prepend as well (add_dll_directory alone isn't enough here).
             os.environ["PATH"] = str(path) + os.pathsep + os.environ.get("PATH", "")
 
 
@@ -82,17 +89,31 @@ class OrpheusTTS(TTSEngine):
         def _load():
             _register_cuda_dlls()
             import llama_cpp
+            import onnxruntime as ort
             from orpheus_cpp import OrpheusCpp
 
+            # The SNAC vocoder's ONNX graph has a few int64 shape ops the CUDA
+            # provider lacks; onnxruntime runs those on the CPU and warns about
+            # the 9 Memcpy nodes it inserts. Harmless (SNAC is tiny next to the
+            # 3B model), so only show real errors.
+            ort.set_default_logger_severity(3)
             # orpheus-cpp hardcodes n_ctx=0, which makes llama.cpp allocate the
             # model's full 131072-token context (~14GB KV + ~6GB compute). Force
-            # a small context during construction.
+            # a small context during construction. With several GPUs llama.cpp
+            # splits the model over all of them (PCIe traffic every token);
+            # keep it on the one VCB placed the voice on when that's known.
             n_ctx = self.cfg.orpheus_n_ctx
+            gpu = None
+            if self.cfg.device.startswith("cuda:"):
+                gpu = int(self.cfg.device.split(":", 1)[1])
             orig_init = llama_cpp.Llama.__init__
 
             def patched_init(inner, *args, **kw):
                 if not kw.get("n_ctx"):
                     kw["n_ctx"] = n_ctx
+                if gpu is not None:
+                    kw.setdefault("main_gpu", gpu)
+                    kw.setdefault("split_mode", llama_cpp.LLAMA_SPLIT_MODE_NONE)
                 return orig_init(inner, *args, **kw)
 
             llama_cpp.Llama.__init__ = patched_init
@@ -108,7 +129,7 @@ class OrpheusTTS(TTSEngine):
             return model
 
         self._model = await asyncio.to_thread(_load)
-        log.info("orpheus loaded (voice=%s)", self.cfg.orpheus_voice)
+        log.info("orpheus loaded on %s (voice=%s)", self.cfg.device, self.cfg.orpheus_voice)
 
     async def synthesize(self, text: str) -> np.ndarray:
         assert self._model is not None, "call load() first"

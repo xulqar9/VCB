@@ -4,3 +4,6 @@
 torch==2.7.1
 torchaudio==2.7.1
 transformers==4.57.6
+# orpheus-cpp asks for numpy>=2 but is a thin wrapper that runs fine on the
+# numpy the rest of the stack (chatterbox, kokoro) is pinned to.
+numpy==1.26.4

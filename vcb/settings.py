@@ -7,6 +7,7 @@ Exit code 0 = saved, 1 = cancelled.
     python -m vcb.settings
 """
 
+import importlib.util
 import shutil
 import sys
 import tkinter as tk
@@ -50,7 +51,9 @@ KOKORO_VOICES = (
     "af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky",
     "am_adam", "am_michael", "bf_emma", "bf_isabella", "bm_george", "bm_lewis",
 )
-# value -> (radio label, plain-language explanation shown under the choices)
+# value -> (radio label, plain-language explanation shown under the choices).
+# Only Kokoro ships with the base install; the launcher installs the others on
+# the first start after they're picked here (see ENGINE_MODULES).
 VOICE_ENGINES = {
     "chatterbox-turbo": (
         "Clone a voice - fast (Chatterbox)",
@@ -67,10 +70,41 @@ VOICE_ENGINES = {
     "kokoro": (
         "Preset voice (Kokoro)",
         "Built-in voices, very light (even runs without a GPU). Can't copy a voice "
-        "and shows little emotion."),
+        "and shows little emotion. Always installed."),
+    "xtts": (
+        "Clone a voice - classic (XTTS v2)",
+        "Coqui's XTTS: clones your sample in 17 languages. Older and slower to start "
+        "talking than Chatterbox, with less natural pacing. ~4 GB of GPU memory."),
+    "orpheus": (
+        "Preset voice - expressive (Orpheus)",
+        "Eight built-in voices with natural laughs, sighs and chuckles, spoken by a "
+        "3B llama.cpp model. Can't copy a voice. NVIDIA GPU only, ~5 GB of GPU memory."),
+    "csm": (
+        "Conversational (Sesame CSM-1B)",
+        "Sesame's conversational model: lively, natural delivery that reacts to the "
+        "flow of the chat. Picks a voice itself unless you point VCB_CSM_REF_AUDIO at "
+        "a sample with its exact transcript (see vcb\\config.py). ~5 GB of GPU memory."),
 }
+# engine -> Python module the launcher's pack provides (installed = importable).
+ENGINE_MODULES = {"chatterbox-turbo": "chatterbox", "xtts": "TTS", "orpheus": "orpheus_cpp",
+                  "csm": "librosa"}
+ENGINE_DOWNLOAD_GB = {"chatterbox-turbo": 3, "xtts": 2, "orpheus": 3, "csm": 3, "indextts": 8}
+ENGINE_SHORT_NAMES = {"indextts": "IndexTTS", "orpheus": "Orpheus"}
+NVIDIA_ONLY_ENGINES = {"indextts", "orpheus"}
+CLONING_ENGINES = {"chatterbox-turbo", "indextts", "xtts"}
+ORPHEUS_VOICES = ("tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe")
 INDEXTTS_STAMP = r".runtime\indextts\installed.txt"
 INDEXTTS_AUTO_GPU = "Auto"
+
+
+def engine_installed(engine: str) -> bool:
+    """Whether the engine's pack is in the launcher's Python already."""
+    if engine == "indextts":
+        return Path(resolve_path(INDEXTTS_STAMP)).is_file()
+    module = ENGINE_MODULES.get(engine)
+    if module is None:
+        return True                      # kokoro: part of the base install
+    return importlib.util.find_spec(module) is not None
 
 
 def _ollama_running(base_url: str) -> bool:
@@ -258,6 +292,12 @@ class SettingsWindow:
         self._combo(self.kokoro_box, 0, "Voice", self.kokoro_voice, KOKORO_VOICES,
                     readonly=True)
 
+        self.orpheus_box = self._group()
+        self.orpheus_voice = tk.StringVar(value=get("VCB_ORPHEUS_VOICE", "tara"))
+        self._combo(self.orpheus_box, 0, "Voice", self.orpheus_voice, ORPHEUS_VOICES,
+                    readonly=True, hint="tara, leah, jess, mia, zoe are female; "
+                    "leo, dan, zac male")
+
         # -- personality ------------------------------------------------------
         self._heading("Personality")
         prompts = available_prompts()
@@ -365,15 +405,15 @@ class SettingsWindow:
             self.key_link.grid()
         else:
             self.key_link.grid_remove()
-        self.clone_box.grid() if engine != "kokoro" else self.clone_box.grid_remove()
+        self.clone_box.grid() if engine in CLONING_ENGINES else self.clone_box.grid_remove()
         self.kokoro_box.grid() if engine == "kokoro" else self.kokoro_box.grid_remove()
+        self.orpheus_box.grid() if engine == "orpheus" else self.orpheus_box.grid_remove()
         if engine == "indextts" and self.gpus:
             self.indextts_box.grid()
         else:
             self.indextts_box.grid_remove()
-        self.engine_info.config(text=self._engine_description(engine), foreground="gray")
-        if engine != "kokoro" and not self.gpus and not (self.rocm_gpus and engine != "indextts"):
-            self.engine_info.config(foreground="#b06000")
+        text, problem = self._engine_description(engine)
+        self.engine_info.config(text=text, foreground="#b06000" if problem else "gray")
         if backend == "ollama":
             self._update_models()
             if _ollama_running(self.ollama_base):
@@ -388,23 +428,27 @@ class SettingsWindow:
                     text="Ollama not found - install it first", foreground="red")
                 self.ollama_link.grid()
 
-    def _engine_description(self, engine: str) -> str:
+    def _engine_description(self, engine: str) -> tuple[str, bool]:
+        """Explanation for the chosen engine plus whether it flags a problem
+        (this PC can't run it as chosen)."""
         about = VOICE_ENGINES.get(engine, ("", "Optional engine (see README)."))[1]
-        if engine == "indextts":
-            if self.rocm_gpus:
-                about += ("\nAMD GPU: IndexTTS needs NVIDIA, so VCB would clone your "
-                          "voice with the fast (Chatterbox) option instead.")
-            elif not self.gpus:
-                about += "\nNo NVIDIA GPU found: VCB would fall back to the preset voice."
-            elif Path(resolve_path(INDEXTTS_STAMP)).is_file():
-                about += "\nInstalled."
-            else:
-                about += ("\nNot installed yet: the next VCB start downloads and sets it "
-                          "up (one-time, ~8 GB, a few minutes).")
-        elif engine != "kokoro" and not self.gpus and not self.rocm_gpus:
-            about += ("\nNo NVIDIA or supported AMD GPU found: voice cloning needs one, so "
-                      "VCB would use the preset voice and ignore your voice sample.")
-        return about
+        if engine == "kokoro":
+            return about, False
+        if engine in NVIDIA_ONLY_ENGINES and self.rocm_gpus:
+            fallback = ("clone your voice with the fast (Chatterbox) option"
+                        if engine in CLONING_ENGINES else "use the Chatterbox voice")
+            return (about + f"\nAMD GPU: {ENGINE_SHORT_NAMES[engine]} needs NVIDIA, so VCB "
+                    f"would {fallback} instead."), True
+        if not self.gpus and not self.rocm_gpus:
+            return (about + "\nNo NVIDIA or supported AMD GPU found: this voice needs one, "
+                    "so VCB would use the Kokoro preset voice instead."), True
+        if engine in NVIDIA_ONLY_ENGINES and not self.gpus:
+            return about + "\nNo NVIDIA GPU found: VCB would fall back to the preset voice.", True
+        if engine_installed(engine):
+            return about + "\nInstalled.", False
+        size = ENGINE_DOWNLOAD_GB.get(engine, 3)
+        return (about + f"\nNot installed yet: the next VCB start downloads and sets it "
+                f"up (one-time, ~{size} GB, a few minutes)."), False
 
     def _budget(self) -> float | None:
         """GPU memory left for the LLM, or None without a usable GPU (or when
@@ -537,10 +581,11 @@ class SettingsWindow:
         if voice and not Path(resolve_path(voice)).is_file():
             messagebox.showerror("VCB settings", f"Voice sample not found:\n{voice}")
             return
-        if self.engine.get() == "indextts" and not voice:
+        if self.engine.get() in ("indextts", "xtts") and not voice:
             messagebox.showerror("VCB settings",
-                                 "IndexTTS has no built-in voice: choose a voice sample "
-                                 "(.wav, 5-15 s of clean speech).")
+                                 f"{ENGINE_SHORT_NAMES.get(self.engine.get(), 'XTTS')} has no "
+                                 "built-in voice: choose a voice sample (.wav, 5-15 s of "
+                                 "clean speech).")
             return
         device = lambda v: None if v.get() == DEFAULT_LABEL else v.get()  # noqa: E731
         bool_str = lambda v: "true" if v.get() else "false"  # noqa: E731
@@ -555,6 +600,7 @@ class SettingsWindow:
             "VCB_TTS_ENGINE": self.engine.get(),
             "VCB_VOICE_WAV": self._store_voice(voice) or None,
             "VCB_KOKORO_VOICE": self.kokoro_voice.get(),
+            "VCB_ORPHEUS_VOICE": self.orpheus_voice.get(),
             "VCB_INDEXTTS_GPUS": (
                 "auto" if self.indextts_gpu.get() == INDEXTTS_AUTO_GPU
                 else self.indextts_gpu.get().split(":")[0].removeprefix("GPU ")),

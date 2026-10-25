@@ -2,16 +2,18 @@
 #
 # First run: downloads uv (a small, fast Python package manager), a private
 # Python 3.12, the right PyTorch build for this PC (NVIDIA CUDA, AMD ROCm or
-# CPU), and all VCB dependencies into .runtime\ next to this repo, then opens
-# the settings window. Later runs start VCB straight away; dependencies are
-# only reinstalled when the requirements files change. Choosing the IndexTTS
-# voice adds its own isolated environment (.runtime\indextts), installed on
-# the next start. Delete .runtime\ to uninstall all of it.
+# CPU), VCB's base dependencies (Kokoro preset voice, Whisper, memory) and the
+# voice engine chosen in the settings into .runtime\ next to this repo. Later
+# runs start VCB straight away; dependencies are only (re)installed when the
+# requirements files change or a different voice engine was chosen. Choosing
+# the IndexTTS voice adds its own isolated environment (.runtime\indextts).
+# Delete .runtime\ to uninstall all of it.
 #
 # Launcher switches (anything else is passed through to main.py):
 #   --settings   open the settings window and exit
 #   --update     get the latest VCB from GitHub (no git needed), then start
-#   --extras     also install the optional TTS engines (xtts / orpheus / csm)
+#   --extras     install all optional voice engines at once (normally the one
+#                you pick in the settings is installed on the next start)
 #   --reinstall  force a clean dependency reinstall
 # Environment:
 #   VCB_TORCH_FLAVOR=cu128|rocm|cpu   force the PyTorch build instead of detecting
@@ -167,19 +169,52 @@ else {
 $Overrides = if ($Flavor -eq "rocm") { "requirements-overrides-rocm.txt" } else { "requirements-overrides.txt" }
 $WantTorch = if ($Flavor -eq "rocm") { $RocmTorchVersion } else { $TorchVersion }
 $Previous = if (Test-Path $Stamp) { (Get-Content $Stamp -Raw).Trim() } else { "" }
-$ExtrasWanted = $Extras -or ($Previous -match "extras=True")
 
-$reqFiles = @("requirements.txt", "requirements-lock.txt", $Overrides)
-if ($ExtrasWanted) { $reqFiles += "requirements-extras.txt" }
+# -- voice engine packs ---------------------------------------------------------
+# The base install only has the Kokoro preset voice. The engine chosen in the
+# settings is installed on the next start (and stays installed when you switch
+# again). --extras installs all of them. IndexTTS is special: see below.
+function Get-TtsEngine {
+    if ($env:VCB_TTS_ENGINE) { return $env:VCB_TTS_ENGINE }
+    $envFile = Join-Path $Root ".env"
+    if (Test-Path $envFile) {
+        $m = Select-String -Path $envFile -Pattern '^\s*VCB_TTS_ENGINE\s*=\s*"?([A-Za-z0-9_-]+)' | Select-Object -Last 1
+        if ($m) { return $m.Matches[0].Groups[1].Value }
+    }
+    return "chatterbox-turbo"
+}
+$Engine = Get-TtsEngine
+# engine -> (requirements file, download size shown to the user)
+$PackFiles = [ordered]@{
+    "chatterbox-turbo" = "requirements-chatterbox.txt"
+    "xtts"             = "requirements-xtts.txt"
+    "orpheus"          = "requirements-orpheus.txt"
+    "csm"              = "requirements-csm.txt"
+}
+$PackNames = @{ "chatterbox-turbo" = "Chatterbox"; "xtts" = "XTTS"; "orpheus" = "Orpheus"; "csm" = "Sesame CSM" }
+$Packs = @()
+if ($Previous -match "packs=([^\r\n]*)") { $Packs += ($Matches[1].Split(",") | Where-Object { $_ }) }
+if ($Extras -or $Previous -match "extras=True") { $Packs += @($PackFiles.Keys) }
+if ($PackFiles.Contains($Engine)) { $Packs += $Engine }
+# Without an NVIDIA GPU, main.py swaps IndexTTS/Orpheus for Chatterbox (AMD) or
+# the preset voice (CPU): make sure what it falls back to is installed.
+if ($Flavor -eq "rocm" -and $Engine -in @("indextts", "orpheus")) { $Packs += "chatterbox-turbo" }
+if ($Flavor -ne "cu128") { $Packs = @($Packs | Where-Object { $_ -ne "orpheus" }) }   # CUDA-only wheels
+$Packs = @($Packs | Sort-Object -Unique)
+
+$reqFiles = @("requirements.txt", "requirements-lock.txt", $Overrides) + @($Packs | ForEach-Object { $PackFiles[$_] })
 $hash = ($reqFiles | ForEach-Object { (Get-FileHash (Join-Path $Root $_) -Algorithm SHA256).Hash }) -join ""
-$want = "torch=$WantTorch+$Flavor`nextras=$ExtrasWanted`nreqs=$hash"
+$want = "torch=$WantTorch+$Flavor`npacks=$($Packs -join ',')`nreqs=$hash"
 
 if ($Previous -ne $want) {
-    switch ($Flavor) {
-        "cu128" { Step "Installing VCB dependencies for your NVIDIA GPU (first run downloads ~5 GB, please wait)" }
-        "rocm"  { Step "Installing VCB dependencies for your AMD GPU ($(if ($AmdGpu) { $AmdGpu } else { 'VCB_TORCH_FLAVOR=rocm' }); first run downloads ~5 GB, please wait)" }
-        default { Step "Installing VCB dependencies (no supported GPU found: CPU mode; first run downloads ~1.5 GB)" }
-    }
+    $fresh = -not ($Previous -match "^torch=")
+    if ($fresh) {
+        switch ($Flavor) {
+            "cu128" { Step "Installing VCB dependencies for your NVIDIA GPU (first run downloads ~4 GB, please wait)" }
+            "rocm"  { Step "Installing VCB dependencies for your AMD GPU ($(if ($AmdGpu) { $AmdGpu } else { 'VCB_TORCH_FLAVOR=rocm' }); first run downloads ~4 GB, please wait)" }
+            default { Step "Installing VCB dependencies (no supported GPU found: CPU mode; first run downloads ~1.5 GB)" }
+        }
+    } else { Step "Updating VCB dependencies" }
     $common = @(
         "pip", "install", "--python", $Py,
         "-c", (Join-Path $Root "requirements-lock.txt"),
@@ -205,11 +240,13 @@ if ($Previous -ne $want) {
     if (-not (Invoke-UvInstall @torchReqs -r (Join-Path $Root "requirements.txt"))) {
         Fail "dependency install failed (see above). Re-run VCB.bat to retry; if it keeps failing, temporarily pause your antivirus or exclude this folder."
     }
-    if ($ExtrasWanted) {
-        Step "Installing optional TTS engines"
-        if (-not (Invoke-UvInstall -r (Join-Path $Root "requirements-extras.txt"))) {
-            Fail "optional engine install failed (see above)"
+    foreach ($pack in $Packs) {
+        Step "Installing the $($PackNames[$pack]) voice engine"
+        if (-not (Invoke-UvInstall -r (Join-Path $Root $PackFiles[$pack]))) {
+            Fail "$($PackNames[$pack]) install failed (see above). Re-run VCB.bat to retry, or pick another voice in the settings."
         }
+    }
+    if ($Packs -contains "orpheus") {
         # fastembed pulls plain onnxruntime, which shadows onnxruntime-gpu (Orpheus).
         & $Uv pip uninstall --python $Py onnxruntime
         if (-not (Invoke-UvInstall --reinstall-package onnxruntime-gpu "onnxruntime-gpu==1.20.2")) {
@@ -226,15 +263,6 @@ if ($Previous -ne $want) {
 $IndexDir = Join-Path $Runtime "indextts"
 $IndexCommit = "d9e41aac89fd00b3d71497fddb287b7f24613712"   # index-tts/index-tts, IndexTTS-2.5
 
-function Get-TtsEngine {
-    if ($env:VCB_TTS_ENGINE) { return $env:VCB_TTS_ENGINE }
-    $envFile = Join-Path $Root ".env"
-    if (Test-Path $envFile) {
-        $m = Select-String -Path $envFile -Pattern '^\s*VCB_TTS_ENGINE\s*=\s*"?([A-Za-z0-9_-]+)' | Select-Object -Last 1
-        if ($m) { return $m.Matches[0].Groups[1].Value }
-    }
-    return "chatterbox-turbo"
-}
 
 function Invoke-Retry([scriptblock]$Action) {
     # Antivirus can briefly lock fresh downloads; retrying gets past it.
@@ -287,7 +315,7 @@ function Ensure-IndexTTS {
     Set-Content $stamp $want -NoNewline
 }
 
-if ((Get-TtsEngine) -eq "indextts") { Ensure-IndexTTS }
+if ($Engine -eq "indextts") { Ensure-IndexTTS }
 
 # -- run ----------------------------------------------------------------------
 Step "Starting VCB (the first start also downloads the speech models, a few GB)"

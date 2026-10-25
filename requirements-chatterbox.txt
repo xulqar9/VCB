@@ -1,0 +1,7 @@
+# Voice engine pack: Chatterbox-Turbo (clones your .wav, voices <laugh>/<sigh>
+# tags). The launcher installs this when you pick "Clone a voice - fast" in the
+# settings; models (~3 GB) download from Hugging Face on the first start.
+# Install with the same constraints/overrides as requirements.txt (see there).
+chatterbox-tts
+# resemble-perth (chatterbox's watermarker) still needs pkg_resources:
+setuptools<81

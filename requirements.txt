@@ -1,5 +1,8 @@
-# Core dependencies -- everything the default setup needs (Chatterbox-Turbo +
-# Kokoro voices, faster-whisper STT, any OpenAI-compatible LLM).
+# Core dependencies -- what every setup needs (Kokoro preset voice, Whisper
+# speech recognition, any OpenAI-compatible LLM, memory). The other voice
+# engines are installed on demand when you pick them in the settings:
+# requirements-chatterbox.txt / -xtts.txt / -orpheus.txt / -csm.txt
+# (IndexTTS gets its own isolated runtime, see scripts\launch.ps1).
 #
 # End users: don't install these by hand, just run VCB.bat -- it sets up a
 # private Python, the right PyTorch build for your GPU, and everything below.
@@ -11,11 +14,12 @@
 #        AMD Radeon (Windows 11, supported models only): AMD's ROCm wheels, see
 #                    requirements-overrides-rocm.txt and scripts\launch.ps1
 #   2. uv pip install -r requirements.txt -c requirements-lock.txt --override requirements-overrides.txt
+#      (on AMD use requirements-overrides-rocm.txt)
+#   3. Voice engines you want, the same way, e.g.
+#      uv pip install -r requirements-chatterbox.txt -c requirements-lock.txt --override requirements-overrides.txt
 #      (chatterbox-tts pins an older torch/newer transformers than we use; the
-#      overrides file resolves that -- on AMD use requirements-overrides-rocm.txt.
-#      Plain pip has no overrides: use `pip install --no-deps chatterbox-tts`
-#      after the rest instead.)
-#   Optional TTS engines (xtts / orpheus / csm): requirements-extras.txt
+#      overrides file resolves that. Plain pip has no overrides: use
+#      `pip install --no-deps chatterbox-tts` after the rest instead.)
 
 # Audio I/O
 sounddevice>=0.4.6
@@ -39,13 +43,10 @@ openai>=1.30
 # Long-term memory (CPU embeddings)
 fastembed
 
-# TTS
-chatterbox-tts       # voice cloning from your .wav + natural <laugh>/<sigh> tags
-kokoro>=0.9          # preset voices, light enough for CPU
+# TTS (Kokoro: preset voices, light enough for CPU)
+kokoro>=0.9
 soundfile
 # Kokoro's English phonemizer downloads this at runtime otherwise:
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
-# chatterbox pins transformers 5.x but works on 4.x:
+# Whisper on torch (AMD GPUs) and Sesame CSM; the engines expect the 4.x API:
 transformers<5
-# resemble-perth (chatterbox watermarker) still needs pkg_resources:
-setuptools<81

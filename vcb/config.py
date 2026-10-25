@@ -212,7 +212,8 @@ class TTSConfig:
     language: str = "en"                 # xtts language
     exaggeration: float = 0.5            # chatterbox emotion intensity (0-1)
     # orpheus (preset voices, emits <laugh>/<sigh>/etc.)
-    orpheus_voice: str = "tara"          # tara leah jess leo dan mia zac zoe
+    orpheus_voice: str = field(                   # tara leah jess leo dan mia zac zoe
+        default_factory=lambda: _env_str("VCB_ORPHEUS_VOICE", "tara"))
     orpheus_n_gpu_layers: int = -1       # -1 = offload all layers to GPU
     orpheus_n_ctx: int = 8192            # cap context; 0 would grab a 14GB KV cache
     orpheus_pre_buffer_s: float = 0.5    # lower = faster first audio

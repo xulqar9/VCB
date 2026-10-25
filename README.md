@@ -57,9 +57,9 @@ say *"go on"*. One double-click to install, no Python setup required.
    <img src="docs/images/settings-window.png" alt="VCB settings window" width="560">
 
 3. **Choose a brain** and (optionally) a **voice sample**, then click **Save**.
-4. **Wait for the one-time setup** (5–15 min, ~5 GB). VCB installs its own
-   private Python and everything it needs into the `.runtime\` folder — nothing
-   is installed system-wide.
+4. **Wait for the one-time setup** (5–15 min, ~4 GB plus the voice you chose).
+   VCB installs its own private Python and everything it needs into the
+   `.runtime\` folder — nothing is installed system-wide.
 5. **Start talking.** 🎉
 
 Next time, `VCB.bat` starts in seconds. Change settings anytime with
@@ -114,6 +114,10 @@ kept free. VCB runs Ollama models with an
 
 ## 🗣️ Voices
 
+Only the light Kokoro preset voice is installed up front. Pick any other voice
+in the settings and the next `VCB.bat` start downloads just that engine
+(one-time, 2–8 GB); the settings window tells you what's installed.
+
 - **Clone a voice — fast (Chatterbox)** — pick a 5–15 s `.wav` of clean speech
   in the settings. No file? It uses a pleasant built-in voice. Needs an NVIDIA
   GPU or a [supported AMD Radeon](#-requirements).
@@ -127,8 +131,14 @@ kept free. VCB runs Ollama models with an
   versions), which `VCB.bat` downloads into `.runtime\indextts` the first time
   you start VCB with it selected (one-time, ~8 GB).
 - **Preset voices (Kokoro)** — light and fast, works even without a GPU.
-- **More engines** — XTTS v2, Orpheus and Sesame CSM are available as optional
-  extras: `VCB.bat --extras`.
+- **Clone a voice — classic (XTTS v2)** — Coqui's multilingual cloner; older
+  and slower to start than Chatterbox.
+- **Preset voice — expressive (Orpheus)** — eight built-in voices with natural
+  laughs and sighs from a 3B llama.cpp model. NVIDIA GPU only.
+- **Conversational (Sesame CSM-1B)** — lively, conversational delivery; seeds
+  its voice from `VCB_CSM_REF_AUDIO` + its exact transcript, or invents one.
+
+`VCB.bat --extras` installs all of them at once.
 
 > [!IMPORTANT]
 > Only clone voices you have the right to use — your own, or with the speaker's consent.
@@ -180,7 +190,7 @@ Most people only ever use the settings window. Under the hood:
 |---|---|
 | `VCB.bat --settings` | Open the settings window only |
 | `VCB.bat --update` | Get the latest VCB from GitHub, then start (same as `VCB Update.bat`) |
-| `VCB.bat --extras` | Also install the optional XTTS / Orpheus / CSM voice engines |
+| `VCB.bat --extras` | Install all optional voice engines at once (normally only the chosen one is) |
 | `VCB.bat --reinstall` | Rebuild the private Python environment from scratch |
 | `VCB.bat --ai-led` | The assistant greets you and leads the conversation |
 | `VCB.bat --prompt coach` | Use a different persona for this run |
@@ -330,11 +340,12 @@ tests/                       pytest suite
 unreal/VcbAvatar/            optional Unreal Engine plugin
 ```
 
-Requirement files: [`requirements.txt`](requirements.txt) (core),
-[`requirements-extras.txt`](requirements-extras.txt) (optional engines),
-[`requirements-lock.txt`](requirements-lock.txt) (tested versions),
+Requirement files: [`requirements.txt`](requirements.txt) (core: Kokoro,
+Whisper, memory), `requirements-chatterbox.txt` / `-xtts.txt` /
+`-orpheus.txt` / `-csm.txt` (voice engine packs the launcher installs on
+demand), [`requirements-lock.txt`](requirements-lock.txt) (tested versions),
 [`requirements-overrides.txt`](requirements-overrides.txt) (resolves
-chatterbox-tts's over-strict pins).
+over-strict pins in chatterbox-tts / orpheus-cpp).
 </details>
 
 ## 🗺️ Roadmap

@@ -82,8 +82,9 @@ def adapt_to_hardware(cfg: AppConfig, tts_engine: str, backend: str) -> str:
     return tts_engine
 
 
-# Engines whose GPU we can choose (orpheus runs inside llama-cpp, not torch).
-_PLACEABLE_TTS = {"chatterbox-turbo", "kokoro", "indextts", "xtts", "csm"}
+# Engines whose GPU we can choose. Orpheus runs inside llama-cpp, not torch,
+# but takes the CUDA index via main_gpu (same numbering as torch).
+_PLACEABLE_TTS = {"chatterbox-turbo", "kokoro", "indextts", "xtts", "csm", "orpheus"}
 
 
 def place_on_gpus(cfg: AppConfig, tts_engine: str, backend: str) -> None:
