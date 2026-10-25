@@ -236,6 +236,40 @@ def test_vad_model_loads_lazily():
     assert seg._model is None
 
 
+def test_vad_warns_when_sound_never_pauses(caplog):
+    """A mic feeding constant 'speech' (noise, speakers, a controller mic) makes
+    every utterance hit the length cap; that must be visible at WARNING level,
+    and a normal utterance must not trigger it."""
+    import logging
+
+    import numpy as np
+
+    from vcb.config import AudioConfig, VADConfig
+    from vcb.vad import SpeechEnd, SpeechStart, VADSegmenter
+
+    audio = AudioConfig()
+    seg = VADSegmenter(VADConfig(max_utterance_s=2.0), audio)
+    seg._speech_prob = lambda frame: 1.0            # mic never goes quiet
+    frame = np.zeros(audio.frame_samples, dtype=np.int16)
+    with caplog.at_level(logging.WARNING, logger="vcb.vad"):
+        for _ in range(seg._max_frames):
+            seg.process_frame(frame)
+    assert "without a pause" in caplog.text
+    assert isinstance(seg.events.get_nowait(), SpeechStart)
+    assert isinstance(seg.events.get_nowait(), SpeechEnd)
+
+    caplog.clear()
+    seg = VADSegmenter(VADConfig(max_utterance_s=2.0), audio)
+    probs = iter([1.0] * 20 + [0.0] * 40)           # speech, then silence
+    seg._speech_prob = lambda frame: next(probs, 0.0)
+    with caplog.at_level(logging.WARNING, logger="vcb.vad"):
+        for _ in range(60):
+            seg.process_frame(frame)
+    assert "without a pause" not in caplog.text
+    assert isinstance(seg.events.get_nowait(), SpeechStart)
+    assert isinstance(seg.events.get_nowait(), SpeechEnd)
+
+
 def test_queued_chunks_carry_their_turns_metrics():
     """Each queued chunk is tagged with the metrics of the turn that produced
     it, so a later turn can't be credited with an earlier turn's audio."""

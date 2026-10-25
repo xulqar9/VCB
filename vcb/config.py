@@ -151,7 +151,11 @@ class TurnTakingConfig:
 
 @dataclass
 class STTConfig:
-    model: str = "large-v3-turbo"        # faster-whisper model name or path
+    # "faster-whisper" (CTranslate2: NVIDIA GPU or CPU) or "whisper-torch"
+    # (plain PyTorch: anywhere torch has a GPU, i.e. also AMD ROCm). main.py
+    # picks whisper-torch on AMD automatically.
+    engine: str = field(default_factory=lambda: _env_str("VCB_STT_ENGINE", "faster-whisper"))
+    model: str = "large-v3-turbo"        # whisper model name or path
     device: str = "cuda"                 # main.py drops to cpu if no CUDA GPU
     device_index: int = 0                # which GPU; chosen automatically with several
     compute_type: str = "float16"

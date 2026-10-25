@@ -149,10 +149,17 @@ def test_rocm_supported_matches_amd_windows_list():
         assert not rocm_supported(name), name
 
 
-def test_amd_budget_counts_only_the_voice():
-    # Speech recognition has no AMD GPU build, so it doesn't take GPU memory.
-    gpus = [GPU("AMD Radeon RX 9060 XT", 16.0)]
-    assert speech_vram_gb("chatterbox-turbo", stt_on_gpu=False) == 4.7
-    assert llm_budget_gb(gpus, "chatterbox-turbo", 2, stt_on_gpu=False) == round(16 - 4.7 - 2, 1)
-    assert llm_budget_gb(gpus, "chatterbox-turbo", 2) < llm_budget_gb(gpus, "chatterbox-turbo", 2,
-                                                                        stt_on_gpu=False)
+def test_torch_whisper_maps_model_names_and_dtypes():
+    from vcb.config import STTConfig
+    from vcb.stt import STT_ENGINES
+    from vcb.stt.torch_whisper_stt import _DTYPES, TorchWhisperSTT
+
+    assert STT_ENGINES["whisper-torch"] is TorchWhisperSTT
+    assert TorchWhisperSTT(STTConfig()).model_id == "openai/whisper-large-v3-turbo"
+    cfg = STTConfig()
+    cfg.model = "small"
+    assert TorchWhisperSTT(cfg).model_id == "openai/whisper-small"
+    cfg.model = "someone/custom-whisper"                     # HF repo id passes through
+    assert TorchWhisperSTT(cfg).model_id == "someone/custom-whisper"
+    assert _DTYPES[STTConfig().compute_type] == "float16"
+    assert _DTYPES[STTConfig().cpu_compute_type] == "float32"  # no int8 kernels in torch

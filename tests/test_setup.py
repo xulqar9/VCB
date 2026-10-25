@@ -111,15 +111,22 @@ def test_gpu_keeps_requested_engine():
         adapt_to_hardware(cfg, "kokoro", backend="metal")
 
 
-def test_amd_gpu_keeps_voice_cloning_but_stt_on_cpu(monkeypatch):
-    # ROCm torch: the voice gets the GPU, faster-whisper (CTranslate2) can't.
+def test_amd_gpu_runs_speech_on_torch(monkeypatch):
+    # ROCm torch: faster-whisper's CTranslate2 can't use the GPU, so speech
+    # recognition switches to the torch Whisper engine and stays on the GPU.
     monkeypatch.delenv("KMP_DUPLICATE_LIB_OK", raising=False)
     cfg = AppConfig()
     assert adapt_to_hardware(cfg, "chatterbox-turbo", backend="rocm") == "chatterbox-turbo"
     assert cfg.tts.device == "cuda"
+    assert cfg.stt.engine == "whisper-torch"
+    assert cfg.stt.device == "cuda" and cfg.stt.model == "large-v3-turbo"
+    assert "KMP_DUPLICATE_LIB_OK" not in os.environ      # no CTranslate2 -> no OpenMP clash
+    # Someone who insists on faster-whisper gets it on the CPU, with Intel's
+    # OpenMP told to coexist with the LLVM OpenMP in AMD's torch.
+    cfg = AppConfig()
+    cfg.stt.engine = "faster-whisper-pinned"
+    adapt_to_hardware(cfg, "chatterbox-turbo", backend="rocm")
     assert cfg.stt.device == "cpu" and cfg.stt.model == cfg.stt.cpu_model
-    assert cfg.stt.compute_type == cfg.stt.cpu_compute_type
-    # Lets CTranslate2's Intel OpenMP coexist with the LLVM OpenMP in AMD's torch.
     assert os.environ["KMP_DUPLICATE_LIB_OK"] == "TRUE"
     # NVIDIA-only engines still clone the sample, through chatterbox.
     for engine in ("indextts", "orpheus"):

@@ -49,17 +49,21 @@ def adapt_to_hardware(cfg: AppConfig, tts_engine: str, backend: str) -> str:
     if backend == "cuda":
         return tts_engine
     if backend == "rocm":
-        # faster-whisper (CTranslate2) has no AMD build, so only the voice
-        # gets the GPU; the CPU speech model keeps recognition responsive.
-        log.warning("AMD GPU detected (ROCm): the voice runs on it; speech recognition "
-                    "has no AMD GPU support and runs on the CPU.")
-        _stt_to_cpu(cfg)
-        # AMD's torch links LLVM's OpenMP (libomp140) while CTranslate2 ships
-        # Intel's (libiomp5md); Intel's runtime aborts the process when it finds
-        # another one loaded ("OMP: Error #15") unless told to coexist. The two
-        # libraries never share a parallel region, so this is safe here.
-        # CTranslate2 only loads later (STT load), so the setting takes effect.
-        os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+        # faster-whisper's CTranslate2 has no AMD build; Whisper as a plain
+        # torch model runs on the GPU like the voice does.
+        if cfg.stt.engine == "faster-whisper":
+            cfg.stt.engine = "whisper-torch"
+            log.info("AMD GPU detected (ROCm): speech recognition and the voice run "
+                     "on it (whisper-torch, chatterbox)")
+        else:
+            _stt_to_cpu(cfg)
+            log.warning("AMD GPU detected (ROCm): the voice runs on it; %r speech "
+                        "recognition can't, so it runs on the CPU", cfg.stt.engine)
+            # AMD's torch links LLVM's OpenMP (libomp140) while CTranslate2
+            # ships Intel's (libiomp5md), which aborts the process when it
+            # finds another runtime loaded ("OMP: Error #15") unless told to
+            # coexist. They never share a parallel region, so this is safe.
+            os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
         if tts_engine in _NVIDIA_ONLY_TTS:
             log.warning("TTS engine %r needs an NVIDIA GPU; using chatterbox-turbo "
                         "instead (it still clones your voice sample)", tts_engine)

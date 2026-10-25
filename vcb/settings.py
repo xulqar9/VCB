@@ -161,7 +161,7 @@ class SettingsWindow:
         self.ollama_base = get("VCB_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
         self.gpus = detect_gpus()                      # NVIDIA (nvidia-smi)
         # Like the launcher, an NVIDIA GPU wins; otherwise a Radeon that AMD's
-        # Windows PyTorch build supports runs the voice (not speech recognition).
+        # Windows PyTorch build supports runs speech recognition and the voice.
         self.amd_gpus = detect_amd_gpus() if not self.gpus else []
         self.rocm_gpus = [g for g in self.amd_gpus if rocm_supported(g.name)]
         installed = _ollama_installed_models(self.ollama_base)
@@ -416,7 +416,7 @@ class SettingsWindow:
             reserve = float(self.reserve.get())
         except ValueError:
             reserve = DEFAULT_RESERVE_GB
-        return llm_budget_gb(gpus, self.engine.get(), reserve, stt_on_gpu=bool(self.gpus))
+        return llm_budget_gb(gpus, self.engine.get(), reserve)
 
     def _update_models(self) -> None:
         """Re-label the model list (fits / too big) for the current voice
@@ -438,11 +438,12 @@ class SettingsWindow:
         self.ollama_model.set(by_tag.get(current, current))
         self.recommended = best
 
-        speech = speech_vram_gb(self.engine.get(), stt_on_gpu=bool(self.gpus))
+        speech = speech_vram_gb(self.engine.get())
         if budget is None:
             if self.rocm_gpus:
                 text = (f"{self.rocm_gpus[0].name} found, but its memory couldn't be read. "
-                        f"Pick a model that leaves ~{speech:.0f} GB free for the voice.")
+                        f"Pick a model that leaves ~{speech:.0f} GB free for VCB's speech "
+                        "recognition + voice.")
             elif self.amd_gpus:
                 text = (f"{self.amd_gpus[0].name} found, but AMD's PyTorch build doesn't "
                         "support it: VCB runs on the CPU with the preset voice. "
@@ -454,12 +455,8 @@ class SettingsWindow:
             return
         gpus = " + ".join(f"{g.name} ({g.total_gb:.0f} GB)"
                           for g in (self.gpus or self.rocm_gpus))
-        if self.gpus:
-            uses = f"VCB's speech recognition + voice use ~{speech:.1f} GB"
-        else:
-            uses = (f"VCB's voice uses ~{speech:.1f} GB (speech recognition runs on the "
-                    "CPU on AMD)")
-        text = f"{gpus}. {uses}, leaving ~{budget:.1f} GB for the model."
+        text = (f"{gpus}. VCB's speech recognition + voice use ~{speech:.1f} GB, "
+                f"leaving ~{budget:.1f} GB for the model.")
         if best is None:
             options = ("switch to the Preset voice (frees ~4 GB) or use the Cloud API option."
                        if self.engine.get() != "kokoro" else "use the Cloud API option.")

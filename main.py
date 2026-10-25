@@ -42,7 +42,7 @@ from vcb.hardware import adapt_to_hardware, gpu_backend, place_on_gpus  # noqa: 
 from vcb.llm import OpenAICompatLLM  # noqa: E402
 from vcb.orchestrator import Orchestrator, speaker_name  # noqa: E402
 from vcb.runtime import ManagedProcesses, setup_logging  # noqa: E402
-from vcb.stt import FasterWhisperSTT  # noqa: E402
+from vcb.stt import STT_ENGINES  # noqa: E402
 from vcb.tts import (  # noqa: E402
     ChatterboxTurboTTS, IndexTTSEngine, KokoroTTS, OrpheusTTS, SesameCSMTTS, XTTSv2TTS,
 )
@@ -68,7 +68,7 @@ _TTS_ENGINES = {
 async def amain(cfg: AppConfig, tts_engine: str, transcript_path) -> None:
     orchestrator = Orchestrator(
         cfg,
-        stt=FasterWhisperSTT(cfg.stt),
+        stt=STT_ENGINES[cfg.stt.engine](cfg.stt),
         llm=OpenAICompatLLM(cfg.llm),
         tts=_TTS_ENGINES[tts_engine](cfg.tts),
         transcript_path=transcript_path,

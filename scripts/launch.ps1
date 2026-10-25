@@ -10,10 +10,12 @@
 #
 # Launcher switches (anything else is passed through to main.py):
 #   --settings   open the settings window and exit
+#   --update     get the latest VCB from GitHub (no git needed), then start
 #   --extras     also install the optional TTS engines (xtts / orpheus / csm)
 #   --reinstall  force a clean dependency reinstall
 # Environment:
 #   VCB_TORCH_FLAVOR=cu128|rocm|cpu   force the PyTorch build instead of detecting
+#   VCB_NO_UPDATE_CHECK=1             skip the "update available" check at start
 
 # Native tools report failure via exit codes (checked below); "Stop" would turn
 # their harmless stderr output into terminating errors on Windows PowerShell.
@@ -40,11 +42,12 @@ $RocmRuntime = @(
     "rocm[libraries,devel] @ $RocmBase/rocm-$RocmRelease.tar.gz"
 )
 
-$SettingsOnly = $false; $Extras = $false; $Reinstall = $false
+$SettingsOnly = $false; $Extras = $false; $Reinstall = $false; $Update = $false
 $Pass = @()
 foreach ($a in $args) {
     switch ($a) {
         "--settings"  { $SettingsOnly = $true }
+        "--update"    { $Update = $true }
         "--extras"    { $Extras = $true }
         "--reinstall" { $Reinstall = $true }
         default       { $Pass += $a }
@@ -53,6 +56,31 @@ foreach ($a in $args) {
 
 function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Fail($msg) { Write-Host "ERROR: $msg" -ForegroundColor Red; exit 1 }
+
+# -- updates (for zip downloads; git checkouts use git pull) -------------------
+$IsGitCheckout = Test-Path (Join-Path $Root ".git")
+if ($Update) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "update.ps1")
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    # The update may have replaced this very script: start VCB with the new one.
+    $rest = @(); if ($Extras) { $rest += "--extras" }; if ($Reinstall) { $rest += "--reinstall" }
+    $env:VCB_NO_UPDATE_CHECK = "1"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @rest @Pass
+    exit $LASTEXITCODE
+}
+if (-not $IsGitCheckout -and -not $env:VCB_NO_UPDATE_CHECK) {
+    # Quick, quiet check: a different latest commit on GitHub than the one
+    # this copy was updated to. Offline or rate-limited -> say nothing.
+    $versionFile = Join-Path $Runtime "version.txt"
+    try {
+        $latest = (Invoke-RestMethod "https://api.github.com/repos/xulqar9/VCB/commits/main" `
+            -Headers @{ Accept = "application/vnd.github.sha"; "User-Agent" = "VCB" } -TimeoutSec 3).Trim()
+        $current = if (Test-Path $versionFile) { (Get-Content $versionFile -First 1).Trim() } else { "" }
+        if ($latest -and $latest -ne $current) {
+            Write-Host "A newer VCB is available - double-click 'VCB Update.bat' to get it (your settings are kept)." -ForegroundColor Yellow
+        }
+    } catch { }
+}
 
 # Keep uv's Python and cache inside .runtime so nothing is spread over the PC
 # (set UV_CACHE_DIR / UV_PYTHON_INSTALL_DIR yourself to share them instead).
@@ -110,8 +138,8 @@ if (-not (Test-Path (Join-Path $Root ".env"))) {
 
 # -- dependencies -------------------------------------------------------------
 # PyTorch build: NVIDIA -> CUDA; a Radeon that AMD supports with PyTorch on
-# Windows (Windows 11 only) -> AMD's ROCm build, so the voice runs on the GPU
-# (speech recognition has no AMD build and stays on the CPU); otherwise CPU.
+# Windows (Windows 11 only) -> AMD's ROCm build, so speech recognition and the
+# voice run on the GPU; otherwise CPU.
 $HasNvidia = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
 if (-not $HasNvidia) { $HasNvidia = Test-Path "$env:SystemRoot\System32\nvidia-smi.exe" }
 function Get-RocmGpu {
@@ -149,7 +177,7 @@ $want = "torch=$WantTorch+$Flavor`nextras=$ExtrasWanted`nreqs=$hash"
 if ($Previous -ne $want) {
     switch ($Flavor) {
         "cu128" { Step "Installing VCB dependencies for your NVIDIA GPU (first run downloads ~5 GB, please wait)" }
-        "rocm"  { Step "Installing VCB dependencies for your AMD GPU ($(if ($AmdGpu) { $AmdGpu } else { 'VCB_TORCH_FLAVOR=rocm' }); first run downloads ~4 GB, please wait)" }
+        "rocm"  { Step "Installing VCB dependencies for your AMD GPU ($(if ($AmdGpu) { $AmdGpu } else { 'VCB_TORCH_FLAVOR=rocm' }); first run downloads ~5 GB, please wait)" }
         default { Step "Installing VCB dependencies (no supported GPU found: CPU mode; first run downloads ~1.5 GB)" }
     }
     $common = @(

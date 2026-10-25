@@ -107,6 +107,11 @@ class VADSegmenter:
 
         ended = self._silence_frames >= self._end_silence_frames
         too_long = len(self._utterance) >= self._max_frames
+        if too_long and self._started_emitted:
+            log.warning("heard %.0f s of sound without a pause -- if you weren't talking "
+                        "that long, the microphone (%s) is picking up noise or the speakers; "
+                        "pick another mic in the settings or lower its level in Windows",
+                        self.cfg.max_utterance_s, self.audio_cfg.input_device or "default")
         if ended or too_long:
             if self._started_emitted:
                 audio = np.concatenate(self._utterance)

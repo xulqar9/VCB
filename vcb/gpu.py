@@ -170,21 +170,17 @@ def detect_amd_gpus() -> list[GPU]:
     return [GPU(n, vram.get(n, 0.0)) for n in names]
 
 
-def speech_vram_gb(tts_engine: str, stt_on_gpu: bool = True) -> float:
-    """GPU memory of VCB's speech stack. On AMD, speech recognition has no GPU
-    build and runs on the CPU, so only the voice counts (stt_on_gpu=False)."""
-    tts = TTS_VRAM_GB.get(tts_engine, TTS_VRAM_DEFAULT_GB)
-    return STT_VRAM_GB + tts if stt_on_gpu else tts
+def speech_vram_gb(tts_engine: str) -> float:
+    return STT_VRAM_GB + TTS_VRAM_GB.get(tts_engine, TTS_VRAM_DEFAULT_GB)
 
 
-def llm_budget_gb(gpus: list[GPU], tts_engine: str, reserve_gb: float,
-                  stt_on_gpu: bool = True) -> float:
+def llm_budget_gb(gpus: list[GPU], tts_engine: str, reserve_gb: float) -> float:
     """GPU memory left for the LLM. Ollama can split a model over several
     GPUs, so their memory adds up (one fast GPU is still better)."""
     if not gpus:
         return 0.0
     total = sum(g.total_gb for g in gpus)
-    return round(max(0.0, total - speech_vram_gb(tts_engine, stt_on_gpu) - reserve_gb), 1)
+    return round(max(0.0, total - speech_vram_gb(tts_engine) - reserve_gb), 1)
 
 
 def recommend(budget_gb: float,

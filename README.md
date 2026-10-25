@@ -63,7 +63,9 @@ say *"go on"*. One double-click to install, no Python setup required.
 5. **Start talking.** 🎉
 
 Next time, `VCB.bat` starts in seconds. Change settings anytime with
-**`VCB Settings.bat`**.
+**`VCB Settings.bat`**. When a newer VCB is out, `VCB.bat` says so at start:
+double-click **`VCB Update.bat`** to get it — your settings, voices and memory
+are kept, no re-download or git needed.
 
 ## 🧠 Pick a brain
 
@@ -177,6 +179,7 @@ Most people only ever use the settings window. Under the hood:
 | Command | What it does |
 |---|---|
 | `VCB.bat --settings` | Open the settings window only |
+| `VCB.bat --update` | Get the latest VCB from GitHub, then start (same as `VCB Update.bat`) |
 | `VCB.bat --extras` | Also install the optional XTTS / Orpheus / CSM voice engines |
 | `VCB.bat --reinstall` | Rebuild the private Python environment from scratch |
 | `VCB.bat --ai-led` | The assistant greets you and leads the conversation |
@@ -256,9 +259,11 @@ platform.openai.com, or switch to Google Gemini's free tier in the settings.
 If it's one AMD supports with PyTorch on Windows — **Radeon RX 9070 / 9070 XT /
 9060 XT, AI PRO R9700, RX 7900 XTX, PRO W7900, RX 7700** — on **Windows 11**
 with a current Adrenalin driver, `VCB.bat` installs AMD's ROCm build of PyTorch
-and the voice (including cloning) runs on the GPU. Speech recognition has no AMD
-GPU build and runs on the CPU with a smaller model. IndexTTS and Orpheus are
-NVIDIA-only; if you pick them VCB clones your voice with Chatterbox instead.
+and both speech recognition and the voice (including cloning) run on the GPU.
+(Speech recognition uses Whisper as a plain PyTorch model there instead of
+faster-whisper, whose CTranslate2 backend has no AMD build; same model, same
+accuracy.) IndexTTS and Orpheus are NVIDIA-only; if you pick them VCB clones
+your voice with Chatterbox instead.
 
 Other Radeons (RX 6000 series, RX 7800 XT, RX 7900 XT, …) run in CPU mode with
 the preset voice. To try AMD's build on an unlisted card anyway (unsupported;
@@ -279,8 +284,9 @@ Responses will be slower than with a GPU.
 <summary><b>Where is my data stored? How do I uninstall?</b></summary>
 
 Everything lives in the VCB folder: settings in `.env`, memory in
-`logs\memory.db`, your personas/voices in `user\`. To uninstall, delete the
-folder — plus the downloaded models in `%USERPROFILE%\.cache\huggingface`.
+`logs\memory.db`, your personas/voices in `user\`. Updates (`VCB Update.bat`)
+never touch those. To uninstall, delete the folder — plus the downloaded
+models in `%USERPROFILE%\.cache\huggingface`.
 </details>
 
 ## 🛠️ For developers
@@ -306,8 +312,9 @@ barge-in and stale-audio rejection, retry safety, resume, transcript pacing,
 memory, tools, and config resolution.
 
 ```
-VCB.bat / VCB Settings.bat   double-click launcher / settings
+VCB.bat / VCB Settings.bat / VCB Update.bat   double-click launcher / settings / updater
 scripts/launch.ps1           launcher logic (uv + private Python + deps)
+scripts/update.ps1           self-updater for zip downloads (GitHub zip overlay)
 main.py                      entry point + CLI
 vcb/
   orchestrator.py            mic -> VAD -> STT -> LLM -> TTS, barge-in, resume
