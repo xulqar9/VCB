@@ -72,14 +72,23 @@ if ($Update) {
 }
 if (-not $IsGitCheckout -and -not $env:VCB_NO_UPDATE_CHECK) {
     # Quick, quiet check: a different latest commit on GitHub than the one
-    # this copy was updated to. Offline or rate-limited -> say nothing.
+    # this copy was updated to, with a peek at what changed so the user can
+    # decide whether it's worth it. Offline or rate-limited -> say nothing.
     $versionFile = Join-Path $Runtime "version.txt"
     try {
+        $hdr = @{ "User-Agent" = "VCB" }
         $latest = (Invoke-RestMethod "https://api.github.com/repos/xulqar9/VCB/commits/main" `
-            -Headers @{ Accept = "application/vnd.github.sha"; "User-Agent" = "VCB" } -TimeoutSec 3).Trim()
+            -Headers ($hdr + @{ Accept = "application/vnd.github.sha" }) -TimeoutSec 3).Trim()
         $current = if (Test-Path $versionFile) { (Get-Content $versionFile -First 1).Trim() } else { "" }
         if ($latest -and $latest -ne $current) {
-            Write-Host "A newer VCB is available - double-click 'VCB Update.bat' to get it (your settings are kept)." -ForegroundColor Yellow
+            Write-Host "A newer VCB is available - double-click 'VCB Update.bat' to get it (optional; your settings are kept)." -ForegroundColor Yellow
+            if ($current) {
+                $cmp = Invoke-RestMethod "https://api.github.com/repos/xulqar9/VCB/compare/$current...$latest" -Headers $hdr -TimeoutSec 3
+                $lines = @($cmp.commits | ForEach-Object { ($_.commit.message -split "`n")[0].Trim() } | Where-Object { $_ })
+                [array]::Reverse($lines)
+                $lines | Select-Object -First 5 | ForEach-Object { Write-Host "  - $_" -ForegroundColor DarkGray }
+                if ($lines.Count -gt 5) { Write-Host "  ... and $($lines.Count - 5) more" -ForegroundColor DarkGray }
+            }
         }
     } catch { }
 }

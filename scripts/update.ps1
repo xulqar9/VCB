@@ -44,6 +44,23 @@ if ($latest -eq $current) {
     exit 0
 }
 
+# What's new since this copy: one line per commit (newest first). Best effort,
+# the update itself doesn't depend on it.
+$changes = @()
+if ($current) {
+    try {
+        $cmp = Invoke-RestMethod "https://api.github.com/repos/$Repo/compare/$current...$latest" `
+            -Headers @{ "User-Agent" = "VCB-updater" } -TimeoutSec 15
+        $changes = @($cmp.commits | ForEach-Object { ($_.commit.message -split "`n")[0].Trim() } | Where-Object { $_ })
+        [array]::Reverse($changes)
+    } catch { }
+}
+if ($changes.Count) {
+    Write-Host "What's new ($($changes.Count) change$(if ($changes.Count -ne 1) { 's' })):" -ForegroundColor Cyan
+    $changes | Select-Object -First 15 | ForEach-Object { Write-Host "  - $_" }
+    if ($changes.Count -gt 15) { Write-Host "  ... and $($changes.Count - 15) more: https://github.com/$Repo/commits/$Branch" }
+}
+
 Step "Downloading VCB $($latest.Substring(0, 7))"
 New-Item -ItemType Directory -Force $Runtime | Out-Null
 $zip = Join-Path $Runtime "update.zip"
@@ -93,3 +110,4 @@ Set-Content $ManifestFile ($newFiles -join "`n") -NoNewline
 Set-Content $VersionFile "$latest`nupdated $(Get-Date -Format s)" -NoNewline
 Remove-Item -Recurse -Force $stage
 Write-Host "VCB updated to $($latest.Substring(0, 7)). Your settings, voices and memory were kept." -ForegroundColor Green
+Write-Host "Full history: https://github.com/$Repo/commits/$Branch" -ForegroundColor DarkGray
