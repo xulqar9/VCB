@@ -218,6 +218,7 @@ class Orchestrator:
         # check for short sounds (see _check_overlap).
         self._overlap_task: asyncio.Task | None = None
         self._side_task: asyncio.Task | None = None
+        self._lead_watchdog: asyncio.Task | None = None   # see _watch_lead_turn
         self._stt_vocab = ""                      # remembered names/jargon for STT
         self._strip_reaction = False              # see _speak_reply(unprompted=)
         self._last_user_spoke = time.monotonic()  # for "silent for N s" in nudges
@@ -296,6 +297,8 @@ class Orchestrator:
         await self._cancel_turn()
         if self._side_task is not None:
             self._side_task.cancel()
+        if self._lead_watchdog is not None:
+            self._lead_watchdog.cancel()
         for t in self._tasks:
             t.cancel()
         for t in self._tasks:
@@ -822,6 +825,27 @@ class Orchestrator:
         # (the model would otherwise blurt the time or set random reminders).
         self._turn_task = asyncio.create_task(
             self._run_lead_turn(cue, m, unprompted=not greeting), name="lead-turn")
+        if p.lead_timeout_s > 0:
+            self._lead_watchdog = asyncio.create_task(
+                self._watch_lead_turn(self._turn_task, m, p.lead_timeout_s),
+                name="lead-watchdog")
+
+    async def _watch_lead_turn(self, task: asyncio.Task, m: TurnMetrics,
+                               timeout: float) -> None:
+        """An AI-led turn nobody asked for must not hog the floor in silence:
+        if it hasn't produced audio by the deadline, drop it (the user can
+        just start talking) and say which stage it was stuck in."""
+        await asyncio.sleep(timeout)
+        if task.done() or m.t_first_audio or self._turn_task is not task:
+            return
+        if not m.t_llm_first_token:
+            stage = "waiting for the model's first token"
+        elif not m.t_first_chunk:
+            stage = "the model's text had nothing speakable yet"
+        else:
+            stage = "waiting for the voice to produce audio (TTS)"
+        log.warning("AI-led turn produced no audio in %.0f s (%s); dropping it", timeout, stage)
+        await self._cancel_turn()
 
     async def _run_lead_turn(self, cue: str, m: TurnMetrics, unprompted: bool) -> None:
         p = self.cfg.proactive

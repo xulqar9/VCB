@@ -435,6 +435,54 @@ def test_lead_turn_skipped_while_busy():
     assert asyncio.run(_run()) is None
 
 
+def test_lead_turn_watchdog_drops_a_silent_greeting(caplog):
+    """A greeting whose audio never comes (TTS stalled, model mute) is cancelled
+    at the deadline with the stuck stage named; one that produced audio in
+    time is left alone."""
+    import logging
+
+    orch = _orch(_FakeLLM([]))
+    orch.cfg.proactive.lead_timeout_s = 0.05
+    stalled = asyncio.Event()
+
+    async def _stuck_speak(messages, m, **_kw):
+        m.mark("t_llm_first_token")
+        m.mark("t_first_chunk")              # text is out, TTS never answers
+        await stalled.wait()
+
+    orch._speak_reply = _stuck_speak
+
+    async def _run():
+        with caplog.at_level(logging.WARNING, logger="vcb.orchestrator"):
+            orch._start_lead_turn(greeting=True)
+            task = orch._turn_task
+            await asyncio.sleep(0.2)
+            return task
+
+    task = asyncio.run(_run())
+    assert task.cancelled()
+    assert orch._turn_task is None
+    assert "produced no audio" in caplog.text and "TTS" in caplog.text
+
+    caplog.clear()
+    orch = _orch(_FakeLLM([]))
+    orch.cfg.proactive.lead_timeout_s = 0.05
+
+    async def _ok_speak(messages, m, **_kw):
+        m.mark("t_first_audio")              # audio reached the speaker in time
+        await asyncio.sleep(0.2)
+
+    orch._speak_reply = _ok_speak
+
+    async def _run_ok():
+        with caplog.at_level(logging.WARNING, logger="vcb.orchestrator"):
+            orch._start_lead_turn(greeting=True)
+            await orch._turn_task
+
+    asyncio.run(_run_ok())
+    assert "produced no audio" not in caplog.text
+
+
 def _lead_cues(orch, greeting_first=True, nudges=2):
     """Start lead turns and capture the cue (last user message) each sends."""
     cues = []

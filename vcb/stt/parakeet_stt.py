@@ -26,6 +26,17 @@ MODEL = "nemo-parakeet-tdt-0.6b-v3"
 _MAX_SECONDS = 30                        # onnx-asr's single-pass limit; VAD caps at 30 s too
 
 
+def _warmup_signal(seconds: float = 2.0, sr: int = 16_000) -> np.ndarray:
+    """Speech-like audio: a gliding harmonic voice with 4 Hz syllable
+    pulses. Enough for the model to emit a few tokens (it hears "Uh oh")."""
+    t = np.arange(int(seconds * sr)) / sr
+    f0 = 120 + 40 * np.sin(2 * np.pi * 0.6 * t)
+    phase = 2 * np.pi * np.cumsum(f0) / sr
+    sig = sum(np.sin(k * phase) / k for k in range(1, 13))
+    sig *= 0.5 * (1 + np.sin(2 * np.pi * 4 * t))
+    return (0.3 * sig / np.abs(sig).max()).astype(np.float32)
+
+
 class ParakeetSTT(STTEngine):
     def __init__(self, cfg: STTConfig) -> None:
         self.cfg = cfg
@@ -54,8 +65,10 @@ class ParakeetSTT(STTEngine):
         def _load():
             model = onnx_asr.load_model(MODEL, providers=providers,
                                         quantization=self.cfg.parakeet_quantization or None)
-            # First call pays session/kernel setup; do it on silence now.
-            model.recognize(np.zeros(16_000, dtype=np.float32), sample_rate=16_000)
+            # First call pays session/kernel setup. Use a voiced signal rather
+            # than silence so the transducer's decoder runs too (on silence it
+            # emits a blank and stops, leaving the decoder cold).
+            model.recognize(_warmup_signal(), sample_rate=16_000)
             return model
 
         self._model = await asyncio.to_thread(_load)

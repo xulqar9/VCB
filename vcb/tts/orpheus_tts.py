@@ -77,6 +77,24 @@ def _patch_snac_int64(model) -> None:
     sess.run = run
 
 
+class _StoppableLLM:
+    """Wraps orpheus-cpp's llama.cpp model so every generation carries a
+    stopping criterion: orpheus-cpp's stream only checks for cancellation
+    between audio frames, and llama.cpp would otherwise run to max_tokens
+    (seconds to tens of seconds) after a barge-in, blocking the next reply."""
+
+    def __init__(self, llm, stop: threading.Event, criteria_list) -> None:
+        self._llm = llm
+        self._criteria = criteria_list([lambda _ids, _logits: stop.is_set()])
+
+    def __call__(self, *args, **kwargs):
+        kwargs.setdefault("stopping_criteria", self._criteria)
+        return self._llm(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._llm, name)
+
+
 class OrpheusTTS(TTSEngine):
     sample_rate = 24_000
     supports_tags = True
@@ -84,6 +102,7 @@ class OrpheusTTS(TTSEngine):
     def __init__(self, cfg: TTSConfig) -> None:
         self.cfg = cfg
         self._model = None
+        self._stop = threading.Event()       # set = abandon the current generation
 
     async def load(self) -> None:
         def _load():
@@ -126,23 +145,39 @@ class OrpheusTTS(TTSEngine):
             finally:
                 llama_cpp.Llama.__init__ = orig_init
             _patch_snac_int64(model)
+            model._llm = _StoppableLLM(model._llm, self._stop, llama_cpp.StoppingCriteriaList)
+            # First generation pays llama.cpp's and the SNAC session's one-time
+            # setup (seconds): do it now, not on the greeting the user would
+            # otherwise sit through in silence -- or talk over.
+            for _ in model.stream_tts_sync("Hello there, nice to meet you.",
+                                           options={"voice_id": self.cfg.orpheus_voice,
+                                                    "max_tokens": 600}):
+                pass
             return model
 
         self._model = await asyncio.to_thread(_load)
         log.info("orpheus loaded on %s (voice=%s)", self.cfg.device, self.cfg.orpheus_voice)
 
-    async def synthesize(self, text: str) -> np.ndarray:
-        assert self._model is not None, "call load() first"
-        options = {
+    def _options(self, text: str) -> dict:
+        return {
             "voice_id": self.cfg.orpheus_voice,
             "pre_buffer_size": self.cfg.orpheus_pre_buffer_s,
             "temperature": self.cfg.orpheus_temperature,
             "top_p": self.cfg.orpheus_top_p,
             "top_k": self.cfg.orpheus_top_k,
             "min_p": self.cfg.orpheus_min_p,
+            # 7 tokens ~ 85 ms of audio and speech runs ~15 chars/s, so ~5.5
+            # tokens per character; headroom on top. orpheus-cpp's default of
+            # 2048 (~25 s) let a runaway on a short fragment stall for ages.
+            "max_tokens": min(2048, 200 + 8 * len(text)),
         }
 
+    async def synthesize(self, text: str) -> np.ndarray:
+        assert self._model is not None, "call load() first"
+        options = self._options(text)
+
         def _run() -> np.ndarray:
+            self._stop.clear()
             parts = [arr for _sr, arr in self._model.stream_tts_sync(text, options=options)]
             if not parts:
                 return np.zeros(0, dtype=np.float32)
@@ -153,20 +188,15 @@ class OrpheusTTS(TTSEngine):
 
     async def synthesize_stream(self, text: str):
         """Yield audio as Orpheus produces it, so playback starts after the first
-        ~0.1s chunk instead of waiting for the whole phrase.
+        ~0.1s chunk instead of waiting for the whole phrase. Closing the
+        generator early (barge-in) stops llama.cpp within one token.
         """
         assert self._model is not None, "call load() first"
-        options = {
-            "voice_id": self.cfg.orpheus_voice,
-            "pre_buffer_size": self.cfg.orpheus_pre_buffer_s,
-            "temperature": self.cfg.orpheus_temperature,
-            "top_p": self.cfg.orpheus_top_p,
-            "top_k": self.cfg.orpheus_top_k,
-            "min_p": self.cfg.orpheus_min_p,
-        }
+        options = self._options(text)
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
-        stop = threading.Event()
+        stop = self._stop
+        stop.clear()
         DONE = object()
 
         def _producer() -> None:
@@ -191,10 +221,11 @@ class OrpheusTTS(TTSEngine):
                     raise item
                 yield item
         finally:
-            stop.set()  # tell the worker to bail on barge-in / aclose
+            stop.set()  # barge-in / aclose: llama.cpp stops at its next token
             with contextlib.suppress(Exception):
                 await fut
 
     async def close(self) -> None:
+        self._stop.set()
         self._model = None
 
