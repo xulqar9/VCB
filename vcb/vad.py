@@ -54,7 +54,7 @@ class VADSegmenter:
             return
         model, _ = await asyncio.to_thread(
             torch.hub.load, "snakers4/silero-vad", "silero_vad",
-            trust_repo=True, onnx=False,
+            trust_repo=True, onnx=False, verbose=False,
         )
         model.eval()
         self._model = model
