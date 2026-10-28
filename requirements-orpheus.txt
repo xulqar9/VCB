@@ -12,6 +12,6 @@ llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download
 nvidia-cublas==13.8.0.4
 nvidia-cuda-runtime==13.4.92
 orpheus-cpp
-# Orpheus' SNAC vocoder needs a CUDA-12 onnxruntime; plain `onnxruntime`
-# (pulled in by fastembed) shadows it, so the launcher removes that one.
+# Orpheus' SNAC vocoder needs the CUDA-12 onnxruntime. The launcher installs
+# onnxruntime-gpu for every NVIDIA setup; pinned here too for manual installs.
 onnxruntime-gpu==1.20.2

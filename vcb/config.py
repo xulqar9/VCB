@@ -149,23 +149,51 @@ class TurnTakingConfig:
     incomplete_wait_s: float = 1.2
 
 
+# Languages the user can speak to VCB in (ISO 639-1 code -> name), for the
+# settings window's language menu. Parakeet (the fast, hallucination-free
+# default recogniser) covers the first 25 -- English and the European
+# languages; anything else falls back to Whisper (99 languages).
+LANGUAGES = {
+    "en": "English", "de": "German", "fr": "French", "es": "Spanish", "it": "Italian",
+    "pt": "Portuguese", "nl": "Dutch", "pl": "Polish", "ru": "Russian", "uk": "Ukrainian",
+    "sv": "Swedish", "da": "Danish", "no": "Norwegian", "fi": "Finnish", "cs": "Czech",
+    "sk": "Slovak", "hu": "Hungarian", "ro": "Romanian", "bg": "Bulgarian", "hr": "Croatian",
+    "sl": "Slovenian", "el": "Greek", "et": "Estonian", "lv": "Latvian", "lt": "Lithuanian",
+    "mt": "Maltese",
+    # Whisper only:
+    "tr": "Turkish", "ar": "Arabic", "he": "Hebrew", "hi": "Hindi", "ja": "Japanese",
+    "ko": "Korean", "zh": "Chinese", "vi": "Vietnamese", "th": "Thai", "id": "Indonesian",
+}
+PARAKEET_LANGUAGES = frozenset(list(LANGUAGES)[:26])
+
+
+def pick_stt_engine(language: str) -> str:
+    """The best speech recogniser for a language: parakeet where it's
+    supported (faster, no phantom words on silence), whisper elsewhere.
+    main.py decides which Whisper build fits the GPU (see vcb.hardware)."""
+    return "parakeet" if language in PARAKEET_LANGUAGES else "faster-whisper"
+
+
 @dataclass
 class STTConfig:
-    # "faster-whisper" (CTranslate2: NVIDIA GPU or CPU) or "whisper-torch"
-    # (plain PyTorch: anywhere torch has a GPU, i.e. also AMD ROCm). main.py
-    # picks whisper-torch on AMD automatically.
-    engine: str = field(default_factory=lambda: _env_str("VCB_STT_ENGINE", "faster-whisper"))
+    # "auto" = parakeet for English/European languages, whisper otherwise
+    # (pick_stt_engine). Explicit: "parakeet" (onnxruntime: NVIDIA GPU or
+    # CPU), "faster-whisper" (CTranslate2: NVIDIA GPU or CPU), "whisper-torch"
+    # (PyTorch: anywhere torch has a GPU, i.e. also AMD ROCm).
+    engine: str = field(default_factory=lambda: _env_str("VCB_STT_ENGINE", "auto"))
     model: str = "large-v3-turbo"        # whisper model name or path
     device: str = "cuda"                 # main.py drops to cpu if no CUDA GPU
     device_index: int = 0                # which GPU; chosen automatically with several
     compute_type: str = "float16"
-    cpu_model: str = "small"             # used instead when running on CPU
+    cpu_model: str = "small"             # whisper on the CPU uses this smaller model
     cpu_compute_type: str = "int8"
-    language: str = "en"
+    parakeet_quantization: str = ""      # "" = fp32 (fastest on most CPUs), or "int8"
+    language: str = field(default_factory=lambda: _env_str("VCB_LANGUAGE", "en"))
     beam_size: int = 1                   # greedy = lowest latency
     # Give Whisper the last bit of conversation plus remembered facts as a
     # prompt, so names and jargon ("Plat 3", "boost", "whiffed") are heard
-    # right. Kept short: long prompts make Whisper hallucinate.
+    # right. Kept short: long prompts make Whisper hallucinate. (Parakeet has
+    # no prompt input and ignores it.)
     use_context: bool = True
     context_chars: int = 200
 

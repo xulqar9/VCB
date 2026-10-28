@@ -255,8 +255,10 @@ if ($Previous -ne $want) {
             Fail "$($PackNames[$pack]) install failed (see above). Re-run VCB.bat to retry, or pick another voice in the settings."
         }
     }
-    if ($Packs -contains "orpheus") {
-        # fastembed pulls plain onnxruntime, which shadows onnxruntime-gpu (Orpheus).
+    if ($Flavor -eq "cu128") {
+        # NVIDIA: speech recognition (parakeet) and Orpheus' vocoder run through
+        # onnxruntime's CUDA provider. fastembed pulls the plain CPU onnxruntime,
+        # which shadows onnxruntime-gpu (same import name), so swap it out.
         & $Uv pip uninstall --python $Py onnxruntime
         if (-not (Invoke-UvInstall --reinstall-package onnxruntime-gpu "onnxruntime-gpu==1.20.2")) {
             Fail "onnxruntime-gpu install failed (see above)"

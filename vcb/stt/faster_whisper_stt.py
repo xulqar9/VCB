@@ -3,29 +3,14 @@ loop (and audio callbacks) never block."""
 
 import asyncio
 import logging
-import os
-import sys
 
 import numpy as np
 
 from ..config import STTConfig
 from .base import STTEngine
+from .cuda_dlls import register_cuda_dlls
 
 log = logging.getLogger("vcb.stt")
-
-
-def _register_cuda_dlls() -> None:
-    """CTranslate2 on Windows needs cuBLAS/cuDNN DLLs from the nvidia-* wheels."""
-    if sys.platform != "win32":
-        return
-    import site
-
-    for base in site.getsitepackages():
-        for pkg in ("cublas", "cudnn", "cuda_nvrtc"):
-            path = os.path.join(base, "nvidia", pkg, "bin")
-            if os.path.isdir(path):
-                os.add_dll_directory(path)
-                os.environ["PATH"] = path + os.pathsep + os.environ["PATH"]
 
 
 class FasterWhisperSTT(STTEngine):
@@ -34,7 +19,7 @@ class FasterWhisperSTT(STTEngine):
         self._model = None
 
     async def load(self) -> None:
-        _register_cuda_dlls()
+        register_cuda_dlls()
         from faster_whisper import WhisperModel
 
         def _load():

@@ -6,7 +6,7 @@ import logging
 import os
 
 from . import gpu
-from .config import AppConfig
+from .config import AppConfig, pick_stt_engine
 
 log = logging.getLogger("vcb.hardware")
 
@@ -33,8 +33,40 @@ def gpu_backend() -> str:
 
 def _stt_to_cpu(cfg: AppConfig) -> None:
     cfg.stt.device = "cpu"
-    cfg.stt.model = cfg.stt.cpu_model
-    cfg.stt.compute_type = cfg.stt.cpu_compute_type
+    if cfg.stt.engine != "parakeet":
+        # Whisper needs a smaller model to keep up on a CPU; parakeet doesn't.
+        cfg.stt.model = cfg.stt.cpu_model
+        cfg.stt.compute_type = cfg.stt.cpu_compute_type
+
+
+def _resolve_stt(cfg: AppConfig, backend: str) -> None:
+    """Turn "auto" into a concrete speech recogniser and put it on a device
+    this machine has. Parakeet (onnxruntime) uses the NVIDIA GPU or, just as
+    happily, the CPU; the Whisper builds depend on the GPU vendor."""
+    if cfg.stt.engine == "auto":
+        cfg.stt.engine = pick_stt_engine(cfg.stt.language)
+    if cfg.stt.engine == "parakeet":
+        if backend != "cuda":
+            cfg.stt.device = "cpu"
+        return
+    if backend == "cuda":
+        return
+    if backend == "rocm":
+        # faster-whisper's CTranslate2 has no AMD build; Whisper as a plain
+        # torch model runs on the GPU like the voice does.
+        if cfg.stt.engine == "faster-whisper":
+            cfg.stt.engine = "whisper-torch"
+            return
+        _stt_to_cpu(cfg)
+        log.warning("%r speech recognition can't use an AMD GPU, so it runs on the CPU",
+                    cfg.stt.engine)
+        # AMD's torch links LLVM's OpenMP (libomp140) while CTranslate2 ships
+        # Intel's (libiomp5md), which aborts the process when it finds another
+        # runtime loaded ("OMP: Error #15") unless told to coexist. They never
+        # share a parallel region, so this is safe.
+        os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+        return
+    _stt_to_cpu(cfg)
 
 
 def adapt_to_hardware(cfg: AppConfig, tts_engine: str, backend: str) -> str:
@@ -46,24 +78,12 @@ def adapt_to_hardware(cfg: AppConfig, tts_engine: str, backend: str) -> str:
         )
     if backend not in BACKENDS:
         raise ValueError(f"unknown GPU backend {backend!r} (use one of: {', '.join(BACKENDS)})")
+    _resolve_stt(cfg, backend)
     if backend == "cuda":
         return tts_engine
     if backend == "rocm":
-        # faster-whisper's CTranslate2 has no AMD build; Whisper as a plain
-        # torch model runs on the GPU like the voice does.
-        if cfg.stt.engine == "faster-whisper":
-            cfg.stt.engine = "whisper-torch"
-            log.info("AMD GPU detected (ROCm): speech recognition and the voice run "
-                     "on it (whisper-torch, chatterbox)")
-        else:
-            _stt_to_cpu(cfg)
-            log.warning("AMD GPU detected (ROCm): the voice runs on it; %r speech "
-                        "recognition can't, so it runs on the CPU", cfg.stt.engine)
-            # AMD's torch links LLVM's OpenMP (libomp140) while CTranslate2
-            # ships Intel's (libiomp5md), which aborts the process when it
-            # finds another runtime loaded ("OMP: Error #15") unless told to
-            # coexist. They never share a parallel region, so this is safe.
-            os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+        log.info("AMD GPU detected (ROCm): the voice runs on it; speech recognition: %s on %s",
+                 cfg.stt.engine, cfg.stt.device)
         if tts_engine in _NVIDIA_ONLY_TTS:
             log.warning("TTS engine %r needs an NVIDIA GPU; using chatterbox-turbo "
                         "instead (it still clones your voice sample)", tts_engine)
@@ -72,7 +92,6 @@ def adapt_to_hardware(cfg: AppConfig, tts_engine: str, backend: str) -> str:
     log.warning("no GPU usable by VCB detected -- running speech recognition and voice "
                 "on the CPU (slower). An NVIDIA GPU (or a ROCm-capable AMD Radeon) "
                 "is recommended.")
-    _stt_to_cpu(cfg)
     cfg.tts.device = "cpu"
     if tts_engine in _GPU_ONLY_TTS:
         log.warning("TTS engine %r needs a GPU for real-time speech; using the kokoro "

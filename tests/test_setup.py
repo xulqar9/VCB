@@ -93,31 +93,68 @@ def test_public_defaults_are_generic():
 
 # -- hardware fallback ----------------------------------------------------------
 
-def test_cpu_fallback_switches_to_light_models():
+def test_cpu_fallback_switches_to_light_models(monkeypatch):
+    monkeypatch.delenv("VCB_STT_ENGINE", raising=False)
+    monkeypatch.delenv("VCB_LANGUAGE", raising=False)
     cfg = AppConfig()
     engine = adapt_to_hardware(cfg, "chatterbox-turbo", backend="cpu")
     assert engine == "kokoro"
-    assert cfg.stt.device == "cpu" and cfg.stt.model == cfg.stt.cpu_model
     assert cfg.tts.device == "cpu"
+    # English -> parakeet, which keeps its full model on the CPU (fast enough).
+    assert cfg.stt.engine == "parakeet" and cfg.stt.device == "cpu"
+    # Whisper on the CPU drops to the small model.
+    cfg = AppConfig()
+    cfg.stt.engine = "faster-whisper"
+    adapt_to_hardware(cfg, "kokoro", backend="cpu")
+    assert cfg.stt.device == "cpu" and cfg.stt.model == cfg.stt.cpu_model
 
 
-def test_gpu_keeps_requested_engine():
+def test_gpu_keeps_requested_engine(monkeypatch):
+    monkeypatch.delenv("VCB_STT_ENGINE", raising=False)
     cfg = AppConfig()
     assert adapt_to_hardware(cfg, "chatterbox-turbo", backend="cuda") == "chatterbox-turbo"
-    assert cfg.stt.device == "cuda"
+    assert cfg.stt.device == "cuda" and cfg.stt.engine == "parakeet"
     with pytest.raises(ValueError):
         adapt_to_hardware(cfg, "nope", backend="cuda")
     with pytest.raises(ValueError):
         adapt_to_hardware(cfg, "kokoro", backend="metal")
 
 
-def test_amd_gpu_runs_speech_on_torch(monkeypatch):
-    # ROCm torch: faster-whisper's CTranslate2 can't use the GPU, so speech
-    # recognition switches to the torch Whisper engine and stays on the GPU.
+def test_stt_engine_follows_language(monkeypatch):
+    from vcb.config import LANGUAGES, PARAKEET_LANGUAGES, pick_stt_engine
+
+    assert "en" in PARAKEET_LANGUAGES and "de" in PARAKEET_LANGUAGES
+    assert "ja" in LANGUAGES and "ja" not in PARAKEET_LANGUAGES
+    assert pick_stt_engine("en") == "parakeet"
+    assert pick_stt_engine("ja") == "faster-whisper"
+    assert pick_stt_engine("xx") == "faster-whisper"           # unknown -> the 99-language model
+    monkeypatch.setenv("VCB_LANGUAGE", "ja")
+    monkeypatch.delenv("VCB_STT_ENGINE", raising=False)
+    cfg = AppConfig()
+    adapt_to_hardware(cfg, "kokoro", backend="cuda")
+    assert cfg.stt.engine == "faster-whisper" and cfg.stt.language == "ja"
+    monkeypatch.setenv("VCB_STT_ENGINE", "whisper-torch")   # explicit choice wins over auto
+    cfg = AppConfig()
+    adapt_to_hardware(cfg, "kokoro", backend="cuda")
+    assert cfg.stt.engine == "whisper-torch"
+
+
+def test_amd_gpu_speech_recognition(monkeypatch):
     monkeypatch.delenv("KMP_DUPLICATE_LIB_OK", raising=False)
+    monkeypatch.delenv("VCB_STT_ENGINE", raising=False)
+    monkeypatch.delenv("VCB_LANGUAGE", raising=False)
+    # Default (English): parakeet on the CPU -- onnxruntime has no ROCm build
+    # on Windows and the CPU is fast enough; the voice keeps the GPU.
     cfg = AppConfig()
     assert adapt_to_hardware(cfg, "chatterbox-turbo", backend="rocm") == "chatterbox-turbo"
     assert cfg.tts.device == "cuda"
+    assert cfg.stt.engine == "parakeet" and cfg.stt.device == "cpu"
+    assert "KMP_DUPLICATE_LIB_OK" not in os.environ
+    # Whisper language: faster-whisper's CTranslate2 can't use the GPU, so it
+    # becomes the torch Whisper engine and stays on the GPU with the full model.
+    monkeypatch.setenv("VCB_LANGUAGE", "ja")
+    cfg = AppConfig()
+    adapt_to_hardware(cfg, "chatterbox-turbo", backend="rocm")
     assert cfg.stt.engine == "whisper-torch"
     assert cfg.stt.device == "cuda" and cfg.stt.model == "large-v3-turbo"
     assert "KMP_DUPLICATE_LIB_OK" not in os.environ      # no CTranslate2 -> no OpenMP clash

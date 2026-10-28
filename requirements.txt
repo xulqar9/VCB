@@ -29,7 +29,9 @@ numpy<2
 torch
 torchaudio
 
-# STT
+# STT: parakeet (onnx-asr, default for English/European) + whisper (faster-whisper)
+onnx-asr[hub]        # onnxruntime itself comes from fastembed below; the
+                     # launcher swaps in onnxruntime-gpu on NVIDIA GPUs
 faster-whisper>=1.0
 nvidia-cublas-cu12; sys_platform == 'win32'
 nvidia-cudnn-cu12; sys_platform == 'win32'

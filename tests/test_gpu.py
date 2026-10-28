@@ -1,5 +1,7 @@
 """GPU budgeting and the Ollama model recommendation."""
 
+import pytest
+
 from vcb.gpu import (
     GPU, OLLAMA_CHOICES, ModelChoice, estimate_vram_gb, llm_budget_gb,
     parse_nvidia_smi, recommend, speech_vram_gb,
@@ -163,3 +165,57 @@ def test_torch_whisper_maps_model_names_and_dtypes():
     assert TorchWhisperSTT(cfg).model_id == "someone/custom-whisper"
     assert _DTYPES[STTConfig().compute_type] == "float16"
     assert _DTYPES[STTConfig().cpu_compute_type] == "float32"  # no int8 kernels in torch
+
+
+def test_parakeet_engine_picks_provider_and_ignores_context(monkeypatch):
+    """Parakeet uses onnxruntime's CUDA provider when asked for cuda and it
+    exists, else the CPU; audio is clipped to its 30 s window; the context
+    hint is accepted but not used (no prompt input)."""
+    import asyncio
+    import sys
+    import types
+
+    import numpy as np
+
+    from vcb.config import STTConfig
+    from vcb.stt import STT_ENGINES
+    from vcb.stt.parakeet_stt import MODEL, ParakeetSTT
+
+    assert STT_ENGINES["parakeet"] is ParakeetSTT
+    calls = {}
+
+    class FakeModel:
+        def recognize(self, waveform, *, sample_rate=16000):
+            calls.setdefault("lens", []).append(len(waveform))
+            return "  hello there " if len(waveform) > 16_000 else ""
+
+    def load_model(name, *, providers=None, quantization=None):
+        calls["name"], calls["providers"], calls["quant"] = name, providers, quantization
+        return FakeModel()
+
+    fake_asr = types.ModuleType("onnx_asr")
+    fake_asr.load_model = load_model
+    fake_ort = types.ModuleType("onnxruntime")
+    fake_ort.get_available_providers = lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    fake_ort.set_default_logger_severity = lambda level: None
+    monkeypatch.setitem(sys.modules, "onnx_asr", fake_asr)
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    monkeypatch.setattr("vcb.stt.parakeet_stt.register_cuda_dlls", lambda: None)
+
+    cfg = STTConfig()
+    cfg.device, cfg.device_index = "cuda", 1
+    stt = ParakeetSTT(cfg)
+    asyncio.run(stt.load())
+    assert calls["name"] == MODEL and calls["quant"] is None
+    assert calls["providers"][0] == ("CUDAExecutionProvider", {"device_id": 1})
+    text = asyncio.run(stt.transcribe(np.zeros(16_000 * 40, np.float32), 16_000,
+                                      context="names: Angel"))
+    assert text == "hello there"
+    assert calls["lens"][-1] == 16_000 * 30                   # clipped to the model's window
+    with pytest.raises(ValueError):
+        asyncio.run(stt.transcribe(np.zeros(100, np.float32), 44_100))
+
+    fake_ort.get_available_providers = lambda: ["CPUExecutionProvider"]   # CPU-only onnxruntime
+    stt = ParakeetSTT(cfg)
+    asyncio.run(stt.load())
+    assert calls["providers"] == ["CPUExecutionProvider"]

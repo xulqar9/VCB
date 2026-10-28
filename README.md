@@ -143,6 +143,16 @@ in the settings and the next `VCB.bat` start downloads just that engine
 > [!IMPORTANT]
 > Only clone voices you have the right to use — your own, or with the speaker's consent.
 
+## 👂 Hearing you
+
+Speech recognition is **NVIDIA Parakeet-TDT 0.6B v3** for English and 25
+European languages: ~40 ms per sentence on a GPU, ~200 ms on a plain CPU
+(so AMD and GPU-less PCs use the exact same model), and — unlike Whisper — it
+never invents words out of silence or background noise. For other languages
+VCB uses **Whisper large-v3-turbo** (99 languages). Set `VCB_LANGUAGE` in
+`.env` (ISO code, e.g. `de`; a settings menu is coming) and VCB picks the
+recogniser; `VCB_STT_ENGINE=parakeet|faster-whisper|whisper-torch` forces one.
+
 ## 💻 Requirements
 
 | | Minimum | Recommended |
@@ -157,7 +167,7 @@ in the settings and the next `VCB.bat` start downloads just that engine
 ```mermaid
 flowchart LR
     mic([🎤 Mic]) --> vad[Silero VAD]
-    vad -->|speech| stt[faster-whisper<br/>STT]
+    vad -->|speech| stt[Parakeet / Whisper<br/>STT]
     stt --> mem[(Memory)]
     mem --> llm{{LLM<br/>Ollama · Gemini · OpenAI}}
     llm -->|streamed tokens| chunk[Sentence<br/>chunker]
@@ -269,11 +279,11 @@ platform.openai.com, or switch to Google Gemini's free tier in the settings.
 If it's one AMD supports with PyTorch on Windows — **Radeon RX 9070 / 9070 XT /
 9060 XT, AI PRO R9700, RX 7900 XTX, PRO W7900, RX 7700** — on **Windows 11**
 with a current Adrenalin driver, `VCB.bat` installs AMD's ROCm build of PyTorch
-and both speech recognition and the voice (including cloning) run on the GPU.
-(Speech recognition uses Whisper as a plain PyTorch model there instead of
-faster-whisper, whose CTranslate2 backend has no AMD build; same model, same
-accuracy.) IndexTTS and Orpheus are NVIDIA-only; if you pick them VCB clones
-your voice with Chatterbox instead.
+and the voice (including cloning) runs on the GPU. Speech recognition
+(Parakeet) runs on the CPU there — about 0.2 s per sentence, no slower in
+practice than NVIDIA users experience; a Whisper language uses Whisper as a
+plain PyTorch model on the GPU. IndexTTS and Orpheus are NVIDIA-only; if you
+pick them VCB clones your voice with Chatterbox instead.
 
 Other Radeons (RX 6000 series, RX 7800 XT, RX 7900 XT, …) run in CPU mode with
 the preset voice. To try AMD's build on an unlisted card anyway (unsupported;
@@ -374,8 +384,9 @@ author's permission — [open an issue](../../issues) or contact
 
 This repository contains only VCB's own code. Libraries and models are not
 included: the launcher downloads them from their official sources (PyPI,
-Hugging Face) and each keeps its own license — e.g. Chatterbox, Kokoro and
-Whisper are MIT/Apache-2.0, Kokoro's English phonemizer is GPL-3.0, IndexTTS
+Hugging Face) and each keeps its own license — e.g. Chatterbox, Kokoro,
+Parakeet (CC-BY-4.0) and Whisper are permissively licensed, Kokoro's English
+phonemizer is GPL-3.0, IndexTTS
 uses the bilibili IndexTTS model license, the optional
 XTTS v2 engine is Coqui's non-commercial CPML, and LLMs follow their provider's
 terms.
@@ -384,6 +395,7 @@ terms.
 
 VCB stands on the shoulders of great open-source work:
 [Silero VAD](https://github.com/snakers4/silero-vad) ·
+[Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) via [onnx-asr](https://github.com/istupakov/onnx-asr) ·
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) ·
 [Chatterbox](https://github.com/resemble-ai/chatterbox) ·
 [IndexTTS](https://github.com/index-tts/index-tts) ·
