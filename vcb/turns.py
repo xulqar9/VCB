@@ -75,3 +75,18 @@ _BUSY = re.compile(
 def mentions_busy(text: str) -> bool:
     """The user says they're busy, focusing, or in the middle of a game."""
     return bool(_BUSY.search(text))
+
+
+_GOODBYE = re.compile(
+    r"\b(?:(?:good)?\s*bye(?:\s*bye)?|bye\s+for\s+now|good\s*night|"
+    r"(?:talk|speak|chat)\s+(?:to|with)\s+you\s+(?:later|soon|tomorrow)|ttyl|"
+    r"see\s+(?:you|ya)(?:\s+(?:later|soon|tomorrow))?|catch\s+you\s+later|later\s+then|"
+    r"(?:i\s+)?(?:gotta|got\s+to|have\s+to|need\s+to|must)\s+go|i'?m\s+(?:off|leaving|heading\s+out)|"
+    r"(?:going|off|heading)\s+to\s+(?:bed|sleep)|signing\s+off|logging\s+off)\b",
+    re.IGNORECASE,
+)
+
+
+def mentions_goodbye(text: str) -> bool:
+    """The user is wrapping up the conversation ("bye", "talk to you later")."""
+    return bool(_GOODBYE.search(text))

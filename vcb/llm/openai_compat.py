@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 
 import openai
@@ -118,6 +119,7 @@ class OpenAICompatLLM(LLMEngine):
                      tools: list[dict] | None = None) -> AsyncIterator["str | ToolCallRequest"]:
         assert self._client is not None, "call load() first"
         attempt = 0
+        tried_efforts: set[str] = set()
         while True:
             yielded = False              # once true, a retry would re-speak the reply
             try:
@@ -187,8 +189,12 @@ class OpenAICompatLLM(LLMEngine):
                 current = self.cfg.reasoning_effort
                 message = _error_message(exc)
                 if (isinstance(exc, openai.BadRequestError) and current
-                        and not yielded and "reasoning" in message.lower()):
+                        and not yielded
+                        and re.search(r"reasoning|thinking", message, re.I)):
                     fallback = _fallback_effort(current, message)
+                    tried_efforts.add(current)
+                    if fallback in tried_efforts:
+                        fallback = None
                     log.warning("%s does not accept Thinking level %r; using %s "
                                 "instead -- change it in VCB settings to stop "
                                 "this warning", self.cfg.base_url, current,

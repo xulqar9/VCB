@@ -190,6 +190,28 @@ def test_busy_user_gets_no_check_ins():
     assert orch._lead_wait() is not None
 
 
+def test_goodbye_stops_check_ins_until_the_user_speaks_again():
+    orch = _orch(_FakeLLM([]))
+    orch._accept_user_text("Uh let me let me go. I will uh talk to you later, right?")
+    assert orch._lead_wait() is None
+    orch._last_activity = time.monotonic() - 3600            # however long it's quiet
+    assert orch._lead_wait() is None
+    orch._accept_user_text("Hey, I'm back.")
+    assert orch._lead_wait() is not None
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Bye!", True), ("Okay, goodbye.", True), ("Good night Sophia", True),
+    ("See you tomorrow.", True), ("I gotta go now.", True), ("ttyl", True),
+    ("I'm going to bed.", True), ("Talk to you soon.", True),
+    ("I saw you yesterday.", False), ("Let's go!", False),
+    ("Tell me a bedtime story.", False), ("What's on the byeline?", False),
+])
+def test_mentions_goodbye(text, expected):
+    from vcb.turns import mentions_goodbye
+    assert mentions_goodbye(text) is expected
+
+
 def test_check_ins_get_rarer_the_more_often_they_happen():
     orch = _orch(_FakeLLM([]))
     p = orch.cfg.proactive

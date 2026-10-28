@@ -55,7 +55,7 @@ from .skills import (
 )
 from .state import Phase, PipelineSnapshot
 from .transcript import Transcript, WordPacer
-from .turns import is_backchannel, looks_incomplete, mentions_busy
+from .turns import is_backchannel, looks_incomplete, mentions_busy, mentions_goodbye
 from .stt.base import STTEngine
 from .tts.base import TTSEngine
 from .vad import SpeechEnd, SpeechStart, VADEvent, VADSegmenter
@@ -213,6 +213,7 @@ class Orchestrator:
         self._unanswered_leads = 0
         self._nudge_times: collections.deque[float] = collections.deque(maxlen=50)
         self._quiet_until = 0.0                   # no AI-led nudges before this
+        self._said_goodbye = False                # no AI-led nudges until the user speaks
         # Talking over the assistant: the task that decides whether it's a
         # real interruption (see _confirm_barge_in), and the transcription
         # check for short sounds (see _check_overlap).
@@ -490,7 +491,7 @@ class Orchestrator:
         the user speaks (or their "I'm busy" quiet period ends)."""
         p = self.cfg.proactive
         now = time.monotonic()
-        if now < self._quiet_until:
+        if now < self._quiet_until or self._said_goodbye:
             return None
         if p.max_unanswered and self._unanswered_leads >= p.max_unanswered:
             return None
@@ -761,6 +762,11 @@ class Orchestrator:
             self._quiet_until = now + self.cfg.proactive.busy_quiet_s
             log.info("user sounds busy: no check-ins for %.0fs",
                      self.cfg.proactive.busy_quiet_s)
+        # After a goodbye the assistant doesn't start a new topic on its own;
+        # anything else they say later lifts it.
+        self._said_goodbye = mentions_goodbye(text)
+        if self._said_goodbye:
+            log.info("user said goodbye: no check-ins until they speak again")
         log.info("user: %s", text)
         self._transcript.user(text)
         self.convo.add_user(text)
@@ -1231,6 +1237,10 @@ class Orchestrator:
             await self._refresh_stt_vocab()
             log.info("memory consolidated: %d turns -> summary=%s, +%d facts, -%d",
                      len(turns), bool(summary), len(facts), len(remove))
+        except LLMConfigError as exc:
+            # A settings problem the user already sees on every turn; the
+            # traceback adds nothing.
+            log.error("consolidation failed: %s", exc)
         except Exception:
             log.exception("consolidation failed")
         finally:

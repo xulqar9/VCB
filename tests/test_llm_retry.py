@@ -58,8 +58,10 @@ class _FakeCompletions:
     def __init__(self, script):
         self._script = script
         self.calls = 0
+        self.sent = []
 
-    async def create(self, **_kwargs):
+    async def create(self, **kwargs):
+        self.sent.append(kwargs)
         behavior = self._script[min(self.calls, len(self._script) - 1)]
         self.calls += 1
         return behavior()          # raises (pre-stream) or returns a stream
@@ -226,14 +228,38 @@ def test_set_optional_params_are_sent():
     assert kwargs["reasoning_effort"] == "minimal"
 
 
-def test_gemini_bad_request_is_a_readable_config_error():
+def _bad_request(body):
+    resp = httpx.Response(400, request=_REQ, json=body)
+    return openai.BadRequestError(message=str(body), response=resp, body=body)
+
+
+def test_unsupported_thinking_level_falls_back_to_an_allowed_one():
+    # Groq's gpt-oss rejects Gemini's "minimal".
+    err = _bad_request({"error": {"type": "invalid_request_error", "message":
+                                  "`reasoning_effort` must be one of `low`, `medium`, or `high`"}})
+    llm, comp = _make_llm([_raises(err), _returns_stream([_chunk("ok")])])
+    llm.cfg.reasoning_effort = "minimal"
+    assert asyncio.run(_collect(llm)) == ["ok"]
+    assert [k.get("reasoning_effort") for k in comp.sent] == ["minimal", "low"]
+    assert llm.cfg.reasoning_effort == "low"      # sticks for the session
+
+
+def test_rejected_thinking_level_without_alternatives_is_dropped():
+    body = [{"error": {"code": 400, "status": "INVALID_ARGUMENT",
+                       "message": "Thinking level MINIMAL is not supported for this model."}}]
+    llm, comp = _make_llm([_raises(_bad_request(body)), _returns_stream([_chunk("ok")])])
+    llm.cfg.reasoning_effort = "minimal"
+    assert asyncio.run(_collect(llm)) == ["ok"]
+    assert "reasoning_effort" not in comp.sent[1]
+    assert llm.cfg.reasoning_effort is None
+
+
+def test_other_bad_request_is_a_readable_config_error():
     from vcb.llm.base import LLMConfigError
 
     body = [{"error": {"code": 400, "status": "INVALID_ARGUMENT",
-                       "message": "Thinking level MINIMAL is not supported for this model."}}]
-    resp = httpx.Response(400, request=_REQ, json=body)
-    err = openai.BadRequestError(message=str(body), response=resp, body=body)
-    llm, _ = _make_llm([_raises(err)])
+                       "message": "Unknown name \"foo\": Cannot find field."}}]
+    llm, comp = _make_llm([_raises(_bad_request(body))])
     llm.cfg.reasoning_effort = "minimal"
 
     async def _run():
@@ -242,5 +268,6 @@ def test_gemini_bad_request_is_a_readable_config_error():
         return info.value
 
     exc = asyncio.run(_run())
-    assert "Thinking level MINIMAL is not supported" in str(exc)
+    assert comp.calls == 1
+    assert "Cannot find field" in str(exc)
     assert "Thinking" in str(exc)
