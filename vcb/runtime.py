@@ -220,9 +220,11 @@ def ollama_fit_warning(entry: dict) -> str | None:
             "Preset voice to free GPU memory, or close other GPU-heavy apps.")
 
 
-def _ollama_preload_and_check(base: str, model: str) -> None:
+def _ollama_preload_and_check(base: str, model: str, system_prompt: str = "") -> None:
     """Load the model now (so the first reply doesn't wait for it) and warn
-    if it spilled over to the CPU."""
+    if it spilled over to the CPU. A one-token chat on the system prompt also
+    pays the runner's first-inference setup and leaves the prompt's prefix in
+    the KV cache, so the opening reply starts in milliseconds, not seconds."""
     log.info("loading %r into memory...", model)
     try:
         _ollama_post(base, "/api/generate", {"model": model}, timeout=600)
@@ -239,6 +241,13 @@ def _ollama_preload_and_check(base: str, model: str) -> None:
             else:
                 log.info("model loaded fully on the GPU (%.1f GB)",
                          entry.get("size_vram", 0) / 2**30)
+    try:
+        messages = ([{"role": "system", "content": system_prompt}] if system_prompt else []) \
+            + [{"role": "user", "content": "Hi"}]
+        _ollama_post(base, "/api/chat", {"model": model, "messages": messages, "stream": False,
+                                         "options": {"num_predict": 1}}, timeout=120)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        log.debug("model warm-up skipped (%s)", exc)
 
 
 class ManagedProcesses:
@@ -334,7 +343,7 @@ class ManagedProcesses:
             _ollama_pull(base, ocfg.model)
         if ocfg.num_ctx > 0:
             self.cfg.llm.model = _ollama_sized_copy(base, ocfg.model, ocfg.num_ctx)
-        _ollama_preload_and_check(base, self.cfg.llm.model)
+        _ollama_preload_and_check(base, self.cfg.llm.model, self.cfg.llm.system_prompt)
 
     def _wait_for_health(self, url: str, timeout_s: float, required: bool = True) -> None:
         deadline = time.monotonic() + timeout_s

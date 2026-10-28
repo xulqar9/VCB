@@ -4,6 +4,7 @@ generation. Transient failures retry with backoff, but only until the first
 token is streamed -- retrying after that would re-speak the reply's start."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -69,6 +70,23 @@ def _config_error(exc: "openai.APIStatusError", cfg: LLMConfig) -> LLMConfigErro
     return None
 
 
+_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high")
+
+
+def _fallback_effort(current: str, message: str) -> str | None:
+    """The thinking level to retry with after a provider rejected `current`:
+    the closest level it lists as allowed (preferring the lighter side), or
+    None to stop sending the field when it names no alternatives."""
+    text = message.lower()
+    allowed = [lvl for lvl in _EFFORT_ORDER
+               if lvl != current and re.search(rf"\b{lvl}\b", text)]
+    if not allowed:
+        return None
+    rank = _EFFORT_ORDER.index(current) if current in _EFFORT_ORDER else 2
+    return min(allowed, key=lambda lvl: (abs(_EFFORT_ORDER.index(lvl) - rank),
+                                         _EFFORT_ORDER.index(lvl) > rank))
+
+
 def _error_message(exc: "openai.APIStatusError") -> str:
     body = exc.body
     if isinstance(body, list) and body:      # Gemini wraps the error in a list
@@ -122,30 +140,38 @@ class OpenAICompatLLM(LLMEngine):
                 if tools:
                     kwargs["tools"] = tools
                 response = await self._client.chat.completions.create(**kwargs)
-                # Tool calls stream in pieces (by index): id/name first, then
-                # the JSON arguments in fragments.
-                pending: dict[int, dict] = {}
-                async for event in response:
-                    if not event.choices:
-                        continue
-                    delta = event.choices[0].delta
-                    if delta.content:
-                        yielded = True
-                        yield delta.content
-                    for tc in getattr(delta, "tool_calls", None) or []:
-                        slot = pending.setdefault(
-                            tc.index if tc.index is not None else len(pending),
-                            {"id": "", "name": "", "args": "", "extra": None})
-                        if tc.id:
-                            slot["id"] = tc.id
-                        if tc.function is not None:
-                            slot["name"] += tc.function.name or ""
-                            slot["args"] += tc.function.arguments or ""
-                        # Gemini attaches extra_content.google.thought_signature
-                        # and rejects the follow-up request without it.
-                        extra = (getattr(tc, "model_extra", None) or {}).get("extra_content")
-                        if extra:
-                            slot["extra"] = extra
+                try:
+                    # Tool calls stream in pieces (by index): id/name first, then
+                    # the JSON arguments in fragments.
+                    pending: dict[int, dict] = {}
+                    async for event in response:
+                        if not event.choices:
+                            continue
+                        delta = event.choices[0].delta
+                        if delta.content:
+                            yielded = True
+                            yield delta.content
+                        for tc in getattr(delta, "tool_calls", None) or []:
+                            slot = pending.setdefault(
+                                tc.index if tc.index is not None else len(pending),
+                                {"id": "", "name": "", "args": "", "extra": None})
+                            if tc.id:
+                                slot["id"] = tc.id
+                            if tc.function is not None:
+                                slot["name"] += tc.function.name or ""
+                                slot["args"] += tc.function.arguments or ""
+                            # Gemini attaches extra_content.google.thought_signature
+                            # and rejects the follow-up request without it.
+                            extra = (getattr(tc, "model_extra", None) or {}).get("extra_content")
+                            if extra:
+                                slot["extra"] = extra
+                finally:
+                    # Always hang up, especially on a barge-in cancel: an open
+                    # connection keeps the server generating the abandoned
+                    # reply, and the next request (Ollama: one slot) waits
+                    # behind that ghost.
+                    with contextlib.suppress(Exception):
+                        await response.close()
                 if pending:
                     yield ToolCallRequest([
                         (s["id"] or f"call_{i}", s["name"], _parse_args(s["args"]), s["extra"])
@@ -155,6 +181,20 @@ class OpenAICompatLLM(LLMEngine):
             except asyncio.CancelledError:
                 raise                    # barge-in: propagate, stream closes
             except openai.APIStatusError as exc:
+                # A thinking level the provider doesn't support (e.g. Gemini's
+                # "minimal" sent to Groq): switch to one it accepts, for the
+                # rest of the session, instead of failing every turn.
+                current = self.cfg.reasoning_effort
+                message = _error_message(exc)
+                if (isinstance(exc, openai.BadRequestError) and current
+                        and not yielded and "reasoning" in message.lower()):
+                    fallback = _fallback_effort(current, message)
+                    log.warning("%s does not accept Thinking level %r; using %s "
+                                "instead -- change it in VCB settings to stop "
+                                "this warning", self.cfg.base_url, current,
+                                repr(fallback) if fallback else "the provider default")
+                    self.cfg.reasoning_effort = fallback
+                    continue
                 config_error = _config_error(exc, self.cfg)
                 if config_error is not None:
                     raise config_error from None

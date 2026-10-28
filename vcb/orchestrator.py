@@ -832,19 +832,20 @@ class Orchestrator:
 
     async def _watch_lead_turn(self, task: asyncio.Task, m: TurnMetrics,
                                timeout: float) -> None:
-        """An AI-led turn nobody asked for must not hog the floor in silence:
-        if it hasn't produced audio by the deadline, drop it (the user can
-        just start talking) and say which stage it was stuck in."""
-        await asyncio.sleep(timeout)
-        if task.done() or m.t_first_audio or self._turn_task is not task:
-            return
-        if not m.t_llm_first_token:
-            stage = "waiting for the model's first token"
-        elif not m.t_first_chunk:
-            stage = "the model's text had nothing speakable yet"
-        else:
-            stage = "waiting for the voice to produce audio (TTS)"
-        log.warning("AI-led turn produced no audio in %.0f s (%s); dropping it", timeout, stage)
+        """An AI-led turn nobody asked for must not hog the floor in silence.
+        Only the voice stage is policed: once the model's text exists, audio
+        has to follow within `timeout`, else the turn is dropped. A slow model
+        is left alone -- it has its own request timeout, and cancelling a
+        stream mid-flight is exactly what must not happen casually (the
+        server keeps generating the ghost, delaying the next real reply)."""
+        while True:
+            await asyncio.sleep(0.5)
+            if task.done() or m.t_first_audio or self._turn_task is not task:
+                return
+            if m.t_first_chunk and time.perf_counter() - m.t_first_chunk > timeout:
+                break
+        log.warning("AI-led turn: the voice produced no audio %.0f s after the text was "
+                    "ready; dropping it", timeout)
         await self._cancel_turn()
 
     async def _run_lead_turn(self, cue: str, m: TurnMetrics, unprompted: bool) -> None:

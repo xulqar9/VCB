@@ -1,0 +1,247 @@
+1- PS D:\VCB> d:\VCB\VCB.bat
+==> Starting VCB (the first start also downloads the speech models, a few GB)
+17:57:38 INFO    vcb.runtime: backend=cloud: no local process to launch (https://generativelanguage.googleapis.com/v1beta/openai)
+17:57:38 INFO    vcb.hardware: GPU placement (free: GPU 0 17.6 GB, GPU 1 15.7 GB): speech recognition -> GPU 1, voice -> GPU 0
+17:57:38 INFO    vcb.runtime: transcript window opened (tailing logs\chat.log)
+17:57:38 INFO    vcb.orchestrator: loading models...
+17:57:38 INFO    vcb.llm: LLM client -> https://generativelanguage.googleapis.com/v1beta/openai (model=gemini-3.5-flash-lite)
+17:57:54 INFO    vcb.tts.csm: csm: seeded voice from D:\VCB\desired_voice.wav (12.5s)
+17:57:54 INFO    vcb.tts.csm: csm loaded on cuda:0 (speaker=0, voice=seeded)
+17:57:55 INFO    vcb.stt: parakeet-tdt-0.6b-v3 loaded on cuda:1
+17:57:55 INFO    vcb.orchestrator: ready - start talking
+17:57:55 INFO    vcb.audio.capture: mic stream open (device=Microphone (Arctis Nova Pro Wir)
+17:57:55 INFO    vcb.audio.playback: speaker stream open (device=default)
+17:58:05 WARNING vcb.orchestrator: AI-led turn produced no audio in 10 s (waiting for the model's first token); dropping it
+17:58:26 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+17:58:35 WARNING vcb.orchestrator: AI-led turn produced no audio in 10 s (waiting for the voice to produce audio (TTS)); dropping it
+17:58:40 INFO    vcb.orchestrator: user: Hello?
+17:58:51 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+17:58:52 INFO    vcb.metrics: turn latency: stt=   316ms | first_token= 10823ms | first_chunk=    45ms | first_audio=  1441ms | voice_to_voice= 12626ms | avg_tts_chunk=n/a | buffer=0ms
+17:58:59 INFO    vcb.orchestrator: assistant: Hello again! How can I help you today?
+17:59:08 INFO    vcb.orchestrator: user: How are you?
+17:59:19 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+17:59:22 INFO    vcb.metrics: turn latency: stt=   178ms | first_token= 10890ms | first_chunk=    46ms | first_audio=  2834ms | voice_to_voice= 13949ms | avg_tts_chunk=n/a | buffer=0ms
+17:59:25 INFO    vcb.orchestrator: assistant: I'm doing great, thanks for asking! How are you doing today?
+17:59:33 INFO    vcb.orchestrator: user: Great, thank you.
+17:59:46 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+17:59:51 INFO    vcb.metrics: turn latency: stt=   258ms | first_token= 12651ms | first_chunk=    63ms | first_audio=  4757ms | voice_to_voice= 17729ms | avg_tts_chunk=n/a | buffer=0ms
+18:00:02 INFO    vcb.orchestrator: assistant: That's wonderful to hear! Is there anything on your mind or anything you'd like to chat about today?
+18:00:05 INFO    vcb.orchestrator: user: No.
+18:00:07 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:00:28 INFO    vcb.metrics: turn latency: stt=   144ms | first_token=  1210ms | first_chunk= 19976ms | first_audio=  1342ms | voice_to_voice= 22673ms | avg_tts_chunk=n/a | buffer=0ms
+18:00:36 INFO    vcb.orchestrator: assistant: Fair enough! I'm here if you need anything later.
+18:00:44 INFO    vcb.orchestrator: user: All right, bye.
+18:00:57 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:00:58 INFO    vcb.metrics: turn latency: stt=   238ms | first_token= 12911ms | first_chunk=    30ms | first_audio=  1529ms | voice_to_voice= 14708ms | avg_tts_chunk=n/a | buffer=0ms
+18:01:10 INFO    vcb.orchestrator: assistant: Take care, bye! I'll be right here whenever you're ready to pick up where we left off.
+
+bye
+18:01:20 INFO    vcb.runtime: stopping transcript window
+Terminate batch job (Y/N)? y
+
+2- PS D:\VCB> d:\VCB\VCB.bat
+==> Starting VCB (the first start also downloads the speech models, a few GB)
+18:02:36 INFO    vcb.runtime: backend=cloud: no local process to launch (https://generativelanguage.googleapis.com/v1beta/openai)
+18:02:36 INFO    vcb.hardware: GPU placement (free: GPU 0 21.7 GB, GPU 1 15.7 GB): speech recognition -> GPU 0, voice -> GPU 0
+18:02:36 INFO    vcb.runtime: transcript window opened (tailing logs\chat.log)
+18:02:36 INFO    vcb.orchestrator: loading models...
+18:02:36 INFO    vcb.llm: LLM client -> https://generativelanguage.googleapis.com/v1beta/openai (model=gemini-3.5-flash-lite)
+18:02:42 INFO    vcb.stt: parakeet-tdt-0.6b-v3 loaded on cuda:0
+18:03:09 INFO    vcb.tts.orpheus: orpheus loaded on cuda:0 (voice=mia)
+18:03:09 INFO    vcb.orchestrator: ready - start talking
+18:03:09 INFO    vcb.audio.capture: mic stream open (device=Microphone (Arctis Nova Pro Wir)
+18:03:09 INFO    vcb.audio.playback: speaker stream open (device=default)
+18:03:19 WARNING vcb.orchestrator: AI-led turn produced no audio in 10 s (waiting for the model's first token); dropping it
+18:03:49 WARNING vcb.orchestrator: AI-led turn produced no audio in 10 s (waiting for the model's first token); dropping it
+18:03:53 INFO    vcb.orchestrator: user: Hi.
+18:04:10 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:04:11 INFO    vcb.metrics: turn latency: stt=   220ms | first_token= 16115ms | first_chunk=    39ms | first_audio=  1938ms | voice_to_voice= 18313ms | avg_tts_chunk=n/a | buffer=0ms
+18:04:17 INFO    vcb.orchestrator: assistant: Hey there! How's it going?
+18:04:21 INFO    vcb.orchestrator: user: Very good, how are you?
+18:04:35 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:04:37 INFO    vcb.metrics: turn latency: stt=   103ms | first_token= 13467ms | first_chunk=   120ms | first_audio=  2247ms | voice_to_voice= 15938ms | avg_tts_chunk=n/a | buffer=0ms
+18:04:47 INFO    vcb.orchestrator: assistant: I'm doing great, thanks for asking! How are things on your end today? Any luck with the job search, or are you getting some gaming time in?
+18:04:51 INFO    vcb.orchestrator: user: Just chilling.
+18:05:07 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:05:07 INFO    vcb.metrics: turn latency: stt=   114ms | first_token= 15917ms | first_chunk=    61ms | first_audio=   540ms | voice_to_voice= 16633ms | avg_tts_chunk=n/a | buffer=0ms
+18:05:22 INFO    vcb.orchestrator: assistant: That sounds like the best kind of day. Honestly, after a couple of years of grinding through the job search, you definitely deserve some downtime. Are you keeping it totally low-key, or did you sneak in some Rocket League with the keyboard and mouse?
+18:05:26 INFO    vcb.orchestrator: user: I have to go now. Bye.
+18:05:42 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:05:42 INFO    vcb.metrics: turn latency: stt=   204ms | first_token= 15635ms | first_chunk=    90ms | first_audio=   492ms | voice_to_voice= 16421ms | avg_tts_chunk=n/a | buffer=0ms
+18:05:49 INFO    vcb.orchestrator: assistant: Take care! Have a good rest of your day, and I'll be right here whenever you want to chat again. Bye!
+
+bye
+18:05:59 INFO    vcb.runtime: stopping transcript window
+Terminate batch job (Y/N)? y
+
+3- PS D:\VCB> d:\VCB\VCB.bat             
+==> Starting VCB (the first start also downloads the speech models, a few GB)
+18:06:59 INFO    vcb.runtime: backend=cloud: no local process to launch (https://generativelanguage.googleapis.com/v1beta/openai)
+18:06:59 INFO    vcb.hardware: GPU placement (free: GPU 0 21.7 GB, GPU 1 15.7 GB): speech recognition -> GPU 0, voice -> GPU 0
+18:06:59 INFO    vcb.runtime: transcript window opened (tailing logs\chat.log)
+18:06:59 INFO    vcb.orchestrator: loading models...
+18:06:59 INFO    vcb.llm: LLM client -> https://generativelanguage.googleapis.com/v1beta/openai (model=gemini-3.5-flash-lite)
+18:07:02 INFO    vcb.stt: parakeet-tdt-0.6b-v3 loaded on cuda:0
+18:07:08 INFO    TTS.utils.manage: tts_models/multilingual/multi-dataset/xtts_v2 is already downloaded.
+18:07:09 INFO    TTS.tts.models: Using model: xtts
+18:07:25 INFO    vcb.tts.xtts: xtts v2 loaded, voice cloned from user\voices\angel.wav
+18:07:25 INFO    vcb.orchestrator: ready - start talking
+18:07:25 INFO    vcb.audio.capture: mic stream open (device=Microphone (Arctis Nova Pro Wir)
+18:07:25 INFO    vcb.audio.playback: speaker stream open (device=default)
+18:07:35 WARNING vcb.orchestrator: AI-led turn produced no audio in 10 s (waiting for the model's first token); dropping it
+18:07:39 INFO    vcb.orchestrator: user: Hello?
+18:07:55 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:08:03 INFO    vcb.metrics: turn latency: stt=   225ms | first_token= 15680ms | first_chunk=    88ms | first_audio=  8234ms | voice_to_voice= 24228ms | avg_tts_chunk=n/a | buffer=0ms
+18:08:08 INFO    vcb.orchestrator: assistant: Hello again! How can I help you today?
+18:08:12 INFO    vcb.orchestrator: user: How you doing, how are you?
+18:08:28 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:08:29 INFO    vcb.metrics: turn latency: stt=   235ms | first_token= 16160ms | first_chunk=    39ms | first_audio=   714ms | voice_to_voice= 17148ms | avg_tts_chunk=n/a | buffer=0ms
+18:08:38 INFO    vcb.orchestrator: assistant: I'm doing great, thanks for asking! How are you holding up today? Anything on your mind?
+18:08:40 INFO    vcb.orchestrator: user: No.
+18:08:41 INFO    vcb.orchestrator: barge-in: interrupting
+18:08:42 INFO    vcb.orchestrator: user: I'm just chilling.
+18:08:59 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:08:59 INFO    vcb.metrics: turn latency: stt=   201ms | first_token= 16527ms | first_chunk=    89ms | first_audio=   742ms | voice_to_voice= 17559ms | avg_tts_chunk=n/a | buffer=0ms
+18:09:08 INFO    vcb.orchestrator: assistant: Nothing wrong with that at all, enjoy the downtime! Are you keeping it relaxing and low-key, or still in that chill zone?
+18:09:11 INFO    vcb.orchestrator: user: I have to go. Bye.
+18:09:22 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:09:23 INFO    vcb.metrics: turn latency: stt=   192ms | first_token= 11133ms | first_chunk=    38ms | first_audio=   437ms | voice_to_voice= 11800ms | avg_tts_chunk=n/a | buffer=0ms
+18:09:30 INFO    vcb.orchestrator: assistant: Take care, bye! I'll be right here whenever you're ready to pick up where we left off.
+
+bye
+18:09:39 INFO    vcb.runtime: stopping transcript window
+Terminate batch job (Y/N)? y
+
+4- PS D:\VCB> d:\VCB\VCB.bat             
+==> Starting VCB (the first start also downloads the speech models, a few GB)
+18:10:30 INFO    vcb.runtime: backend=cloud: no local process to launch (https://generativelanguage.googleapis.com/v1beta/openai)
+18:10:30 INFO    vcb.hardware: GPU placement (free: GPU 0 21.7 GB, GPU 1 15.7 GB): speech recognition -> GPU 0, voice -> GPU 0
+18:10:30 INFO    vcb.runtime: transcript window opened (tailing logs\chat.log)
+18:10:30 INFO    vcb.orchestrator: loading models...
+18:10:31 INFO    vcb.llm: LLM client -> https://generativelanguage.googleapis.com/v1beta/openai (model=gemini-3.5-flash-lite)
+18:10:37 INFO    vcb.stt: parakeet-tdt-0.6b-v3 loaded on cuda:0
+Xet Storage is enabled for this repo, but the 'hf_xet' package is not installed. Falling back to regular HTTP download. For better performance, install the packagewith: `pip install huggingface_hub[hf_xet]` or `pip install hf_xet`
+18:10:39 WARNING huggingface_hub.file_download: Xet Storage is enabled for this repo, but the 'hf_xet' package is not installed. Falling back to regular HTTP download. For better performance, install the package with: `pip install huggingface_hub[hf_xet]` or `pip install hf_xet`
+af_nicole.pt: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████| 523k/523k [00:00<00:00, 3.60MB/s]
+18:10:54 INFO    vcb.tts: kokoro loaded on cuda:0 (voice=af_nicole)
+18:10:54 INFO    vcb.orchestrator: ready - start talking
+18:10:54 INFO    vcb.audio.capture: mic stream open (device=Microphone (Arctis Nova Pro Wir)
+18:10:54 INFO    vcb.audio.playback: speaker stream open (device=default)
+18:11:04 WARNING vcb.orchestrator: AI-led turn produced no audio in 10 s (waiting for the model's first token); dropping it
+18:11:07 INFO    vcb.orchestrator: user: Hi
+18:11:21 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:11:22 INFO    vcb.metrics: turn latency: stt=   171ms | first_token= 14306ms | first_chunk=    46ms | first_audio=   272ms | voice_to_voice= 14795ms | avg_tts_chunk=n/a | buffer=0ms
+18:11:26 INFO    vcb.orchestrator: assistant: Hey there! How's your day going?
+18:11:31 INFO    vcb.orchestrator: user: Very good, how about yours?
+18:11:46 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:11:46 INFO    vcb.metrics: turn latency: stt=   243ms | first_token= 15317ms | first_chunk=    32ms | first_audio=   375ms | voice_to_voice= 15967ms | avg_tts_chunk=n/a | buffer=0ms
+18:11:59 INFO    vcb.orchestrator: assistant: Mine's going great, thanks for asking! What's on your mind today? Anything fun going on, or just taking it easy?
+18:12:03 INFO    vcb.orchestrator: user: I have to go. Bye.
+18:12:18 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:12:18 INFO    vcb.metrics: turn latency: stt=   202ms | first_token= 14302ms | first_chunk=    79ms | first_audio=   330ms | voice_to_voice= 14913ms | avg_tts_chunk=n/a | buffer=0ms
+18:12:28 INFO    vcb.orchestrator: assistant: No worries at all! Take care, and I'll be right here whenever you want to chat again. Bye!
+
+bye
+18:12:33 INFO    vcb.runtime: stopping transcript window
+Terminate batch job (Y/N)? y
+
+5- PS D:\VCB> d:\VCB\VCB.bat             
+==> Starting VCB (the first start also downloads the speech models, a few GB)
+18:13:18 INFO    vcb.runtime: backend=cloud: no local process to launch (https://generativelanguage.googleapis.com/v1beta/openai)
+18:13:18 INFO    vcb.hardware: GPU placement (free: GPU 0 22.0 GB, GPU 1 15.7 GB): speech recognition -> GPU 1, voice -> GPU 0
+18:13:18 INFO    vcb.runtime: transcript window opened (tailing logs\chat.log)
+18:13:18 INFO    vcb.orchestrator: loading models...
+18:13:18 INFO    vcb.llm: LLM client -> https://generativelanguage.googleapis.com/v1beta/openai (model=gemini-3.5-flash-lite)
+18:13:23 INFO    vcb.tts.indextts: starting IndexTTS on GPU 0 (first start after install takes a minute)
+18:13:48 INFO    vcb.tts.indextts: indextts ready on GPU 0 (sr=22050, ~5.9 GB GPU)
+18:13:48 INFO    vcb.tts.indextts: indextts voice: user\voices\angel.wav, 1 copy
+18:13:57 INFO    vcb.stt: parakeet-tdt-0.6b-v3 loaded on cuda:1
+18:13:57 INFO    vcb.orchestrator: ready - start talking
+18:13:57 INFO    vcb.audio.capture: mic stream open (device=Microphone (Arctis Nova Pro Wir)
+18:13:57 INFO    vcb.audio.playback: speaker stream open (device=default)
+18:14:07 WARNING vcb.orchestrator: AI-led turn produced no audio in 10 s (waiting for the model's first token); dropping it
+18:14:10 INFO    vcb.orchestrator: user: Hi
+18:14:25 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:14:27 INFO    vcb.metrics: turn latency: stt=   623ms | first_token= 14961ms | first_chunk=    90ms | first_audio=  2166ms | voice_to_voice= 17840ms | avg_tts_chunk=n/a | buffer=0ms
+18:14:31 INFO    vcb.orchestrator: assistant: Hey there! How's your day going?
+18:14:35 INFO    vcb.orchestrator: user: Very good, how about yours?
+18:14:48 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:14:52 INFO    vcb.metrics: turn latency: stt=   241ms | first_token= 13047ms | first_chunk=    92ms | first_audio=  4480ms | voice_to_voice= 17860ms | avg_tts_chunk=n/a | buffer=0ms
+18:15:01 INFO    vcb.orchestrator: assistant: I'm doing great, thanks for asking! How is the job search going today, or are you taking a well-deserved break to hitsome aerials in Rocket League?
+18:15:07 INFO    vcb.orchestrator: user: I have to go now. I'll see you later. Bye.
+18:15:22 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:15:24 INFO    vcb.metrics: turn latency: stt=   278ms | first_token= 15633ms | first_chunk=    44ms | first_audio=  1992ms | voice_to_voice= 17947ms | avg_tts_chunk=n/a | buffer=0ms
+18:15:28 INFO    vcb.orchestrator: assistant: Take care! See you later, bye!
+
+bye
+18:15:34 INFO    vcb.runtime: stopping transcript window
+Terminate batch job (Y/N)? y
+
+6- PS D:\VCB> d:\VCB\VCB.bat             
+==> Starting VCB (the first start also downloads the speech models, a few GB)
+18:16:20 INFO    vcb.runtime: backend=cloud: no local process to launch (https://generativelanguage.googleapis.com/v1beta/openai)
+18:16:20 INFO    vcb.hardware: GPU placement (free: GPU 0 22.0 GB, GPU 1 15.7 GB): speech recognition -> GPU 0, voice -> GPU 0
+18:16:20 INFO    vcb.runtime: transcript window opened (tailing logs\chat.log)
+18:16:20 INFO    vcb.orchestrator: loading models...
+18:16:20 INFO    vcb.llm: LLM client -> https://generativelanguage.googleapis.com/v1beta/openai (model=gemini-3.5-flash-lite)
+18:16:23 INFO    vcb.stt: parakeet-tdt-0.6b-v3 loaded on cuda:0
+Fetching 10 files: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████| 10/10 [00:00<00:00, 6637.61it/s]
+18:16:35 INFO    root: input frame rate=25
+loaded PerthNet (Implicit) at step 250,000
+  6%|███████                                                                                                                     | 57/1000 [00:00<00:10, 86.59it/s]
+S3 Token -> Mel Inference...
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 23.91it/s]
+18:16:55 INFO    vcb.tts.chatterbox_turbo: chatterbox-turbo loaded on cuda:0 (sr=24000), voice: D:\VCB\user\voices\angel.wav
+18:16:55 INFO    vcb.orchestrator: ready - start talking
+18:16:55 INFO    vcb.audio.capture: mic stream open (device=Microphone (Arctis Nova Pro Wir)
+18:16:55 INFO    vcb.audio.playback: speaker stream open (device=default)
+18:17:05 WARNING vcb.orchestrator: AI-led turn produced no audio in 10 s (waiting for the model's first token); dropping it
+18:17:09 INFO    vcb.orchestrator: user: Hi
+18:17:22 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+  2%|██▌                                                                                                                         | 21/1000 [00:00<00:19, 51.25it/s]
+S3 Token -> Mel Inference...
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 34.47it/s]
+18:17:23 INFO    vcb.metrics: turn latency: stt=   182ms | first_token= 13830ms | first_chunk=    41ms | first_audio=   553ms | voice_to_voice= 14607ms | avg_tts_chunk=n/a | buffer=0ms
+  4%|████▌                                                                                                                      | 37/1000 [00:00<00:07, 135.94it/s]
+S3 Token -> Mel Inference...
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 27.79it/s]
+18:17:26 INFO    vcb.orchestrator: assistant: Hi there! How are you doing today?
+18:17:30 INFO    vcb.orchestrator: user: Very good. How are you?
+18:17:39 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+18:17:39 INFO    vcb.orchestrator: memory consolidated: 41 turns -> summary=True, +5 facts, -0
+18:17:42 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+  5%|██████▎                                                                                                                    | 51/1000 [00:00<00:08, 110.22it/s]
+S3 Token -> Mel Inference...
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 30.75it/s]
+18:17:43 INFO    vcb.metrics: turn latency: stt=   111ms | first_token= 11953ms | first_chunk=    39ms | first_audio=   611ms | voice_to_voice= 12713ms | avg_tts_chunk=n/a | buffer=0ms
+  3%|████                                                                                                                       | 33/1000 [00:00<00:07, 133.18it/s]
+S3 Token -> Mel Inference...
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 34.12it/s]
+18:17:47 INFO    vcb.orchestrator: assistant: I'm doing great, thanks for asking! How's your day going?
+18:17:52 INFO    vcb.orchestrator: user: Great. Thanks for asking.
+18:18:05 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+  3%|███▋                                                                                                                        | 30/1000 [00:00<00:12, 76.73it/s]
+S3 Token -> Mel Inference...
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 33.34it/s]
+18:18:06 INFO    vcb.metrics: turn latency: stt=   218ms | first_token= 13301ms | first_chunk=    63ms | first_audio=   526ms | voice_to_voice= 14107ms | avg_tts_chunk=n/a | buffer=0ms
+  9%|███████████▎                                                                                                               | 92/1000 [00:00<00:06, 137.02it/s]
+S3 Token -> Mel Inference...
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 26.51it/s]
+18:18:12 INFO    vcb.orchestrator: assistant: Love to hear it! Is there anything you'd like to chat about today, or just taking it easy?
+18:18:16 INFO    vcb.orchestrator: user: I have to go now. Bye.
+18:18:32 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+  2%|██▊                                                                                                                         | 23/1000 [00:00<00:14, 65.40it/s]
+S3 Token -> Mel Inference...
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 33.32it/s]
+18:18:32 INFO    vcb.metrics: turn latency: stt=   214ms | first_token= 15915ms | first_chunk=    66ms | first_audio=   482ms | voice_to_voice= 16676ms | avg_tts_chunk=n/a | buffer=0ms
+  7%|████████▉                                                                                                                  | 73/1000 [00:00<00:06, 139.28it/s]
+S3 Token -> Mel Inference...
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 28.40it/s]
+  2%|███                                                                                                                        | 25/1000 [00:00<00:07, 134.81it/s]
+S3 Token -> Mel Inference...
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 33.38it/s]
+18:18:39 INFO    vcb.orchestrator: assistant: Take care! Have a good one, and I'll be right here whenever you're back. Bye!
+
+bye
+18:18:40 INFO    vcb.runtime: stopping transcript window
+Terminate batch job (Y/N)? y

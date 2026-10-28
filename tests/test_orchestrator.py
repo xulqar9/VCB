@@ -436,13 +436,14 @@ def test_lead_turn_skipped_while_busy():
 
 
 def test_lead_turn_watchdog_drops_a_silent_greeting(caplog):
-    """A greeting whose audio never comes (TTS stalled, model mute) is cancelled
-    at the deadline with the stuck stage named; one that produced audio in
-    time is left alone."""
+    """A greeting whose text is ready but whose audio never comes (TTS
+    stalled) is cancelled at the deadline; a slow model is NOT cancelled (it
+    has its own timeout, and a cancelled stream leaves a ghost generation on
+    the server); one that produced audio in time is left alone."""
     import logging
 
     orch = _orch(_FakeLLM([]))
-    orch.cfg.proactive.lead_timeout_s = 0.05
+    orch.cfg.proactive.lead_timeout_s = 0.6
     stalled = asyncio.Event()
 
     async def _stuck_speak(messages, m, **_kw):
@@ -456,21 +457,42 @@ def test_lead_turn_watchdog_drops_a_silent_greeting(caplog):
         with caplog.at_level(logging.WARNING, logger="vcb.orchestrator"):
             orch._start_lead_turn(greeting=True)
             task = orch._turn_task
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(1.5)
             return task
 
     task = asyncio.run(_run())
     assert task.cancelled()
     assert orch._turn_task is None
-    assert "produced no audio" in caplog.text and "TTS" in caplog.text
+    assert "produced no audio" in caplog.text
 
     caplog.clear()
     orch = _orch(_FakeLLM([]))
-    orch.cfg.proactive.lead_timeout_s = 0.05
+    orch.cfg.proactive.lead_timeout_s = 0.6
+
+    async def _slow_model(messages, m, **_kw):
+        await asyncio.sleep(1.5)             # no first token yet: a slow API
+        m.mark("t_first_audio")
+
+    orch._speak_reply = _slow_model
+
+    async def _run_slow():
+        with caplog.at_level(logging.WARNING, logger="vcb.orchestrator"):
+            orch._start_lead_turn(greeting=True)
+            task = orch._turn_task
+            await task
+            return task
+
+    task = asyncio.run(_run_slow())
+    assert not task.cancelled() and "produced no audio" not in caplog.text
+
+    caplog.clear()
+    orch = _orch(_FakeLLM([]))
+    orch.cfg.proactive.lead_timeout_s = 0.6
 
     async def _ok_speak(messages, m, **_kw):
+        m.mark("t_first_chunk")
         m.mark("t_first_audio")              # audio reached the speaker in time
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(1.0)
 
     orch._speak_reply = _ok_speak
 

@@ -29,6 +29,7 @@ _EMPTY = SimpleNamespace(choices=[])   # keep-alive event with no choice
 class _FakeStream:
     def __init__(self, events):
         self._events = events
+        self.closed = 0
 
     def __aiter__(self):
         return self._gen()
@@ -38,6 +39,9 @@ class _FakeStream:
             if isinstance(ev, BaseException):
                 raise ev
             yield ev
+
+    async def close(self):
+        self.closed += 1
 
 
 def _returns_stream(events):
@@ -93,6 +97,28 @@ def test_midstream_error_does_not_retry_or_duplicate():
     asyncio.run(_run())
     assert out == ["Hello", " world"]      # streamed once, not duplicated
     assert comp.calls == 1                  # no retry after tokens were emitted
+
+
+def test_cancelled_stream_hangs_up():
+    """A barge-in cancels the consumer mid-stream; the HTTP response must be
+    closed so the server stops generating the abandoned reply (otherwise the
+    next request waits behind that ghost -- Ollama runs one slot per model).
+    A stream read to the end is closed too."""
+    stream = _FakeStream([_chunk("Hello"), _chunk(" there"), _chunk(" friend")])
+    llm, _comp = _make_llm([lambda: stream])
+
+    async def _run():
+        agen = llm.stream([{"role": "user", "content": "hi"}])
+        assert await agen.__anext__() == "Hello"
+        await agen.aclose()                 # what task cancellation does to the generator
+
+    asyncio.run(_run())
+    assert stream.closed == 1
+
+    stream = _FakeStream([_chunk("Hi")])
+    llm, _comp = _make_llm([lambda: stream])
+    assert asyncio.run(_collect(llm)) == ["Hi"]
+    assert stream.closed == 1
 
 
 def test_prestream_error_retries_then_succeeds():

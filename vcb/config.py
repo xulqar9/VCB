@@ -478,8 +478,9 @@ class ProactiveConfig:
     welcome_back_min_s: float = 60.0
     lead_temperature: float = 0.8        # livelier than the low default when the AI drives
     lead_max_tokens: int = 160           # give lead turns room to actually say something
-    # A greeting/nudge that hasn't made a sound by then is dropped (with the
-    # stuck stage logged) so it can't hold the floor in silence. 0 = never.
+    # A greeting/nudge whose voice hasn't made a sound this long after its text
+    # was ready is dropped, so a stuck TTS can't hold the floor in silence.
+    # 0 = never. (A slow model isn't policed: it has its own request timeout.)
     lead_timeout_s: float = 10.0
     hint: str = field(default_factory=lambda: (
         "Say what you'd naturally say into the pause, out loud. There is nothing "
