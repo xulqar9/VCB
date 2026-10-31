@@ -172,6 +172,32 @@ def test_amd_gpu_speech_recognition(monkeypatch):
         assert adapt_to_hardware(AppConfig(), engine, backend="rocm") == engine
 
 
+def test_bypass_miopen_rnn_disables_cudnn_only_inside_rnns():
+    torch = pytest.importorskip("torch")
+    from vcb import hardware
+
+    originals = {cls: cls.forward for cls in (torch.nn.LSTM, torch.nn.GRU, torch.nn.RNN)}
+    seen = []
+
+    def spy(self, *args, **kwargs):
+        seen.append(torch.backends.cudnn.enabled)
+        return originals[torch.nn.LSTM](self, *args, **kwargs)
+
+    try:
+        torch.nn.LSTM.forward = spy
+        hardware.bypass_miopen_rnn()
+        hardware.bypass_miopen_rnn()                      # idempotent: wraps once
+        lstm = torch.nn.LSTM(4, 3, batch_first=True)
+        out, _ = lstm(torch.zeros(1, 2, 4))
+        assert out.shape == (1, 2, 3)
+        assert seen == [False]
+        assert torch.backends.cudnn.enabled               # restored afterwards
+        assert torch.nn.LSTM.forward.__wrapped__ is spy
+    finally:
+        for cls, fwd in originals.items():
+            cls.forward = fwd
+
+
 def test_gpu_backend_distinguishes_rocm(monkeypatch):
     import sys
     import types

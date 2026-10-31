@@ -38,7 +38,9 @@ import contextlib  # noqa: E402
 import logging  # noqa: E402
 
 from vcb.config import AppConfig, available_prompts, build_action_instructions, load_system_prompt  # noqa: E402
-from vcb.hardware import adapt_to_hardware, gpu_backend, place_on_gpus  # noqa: E402
+from vcb.hardware import (  # noqa: E402
+    adapt_to_hardware, bypass_miopen_rnn, gpu_backend, place_on_gpus,
+)
 from vcb.llm import OpenAICompatLLM  # noqa: E402
 from vcb.orchestrator import Orchestrator, speaker_name  # noqa: E402
 from vcb.runtime import ManagedProcesses, setup_logging  # noqa: E402
@@ -165,6 +167,8 @@ def main() -> None:
                     key, env_value, file_value)
     backend = gpu_backend()
     tts_engine = adapt_to_hardware(cfg, TTS_ENGINE, backend)
+    if backend == "rocm":
+        bypass_miopen_rnn()
     # Engines that act moods (IndexTTS) teach the LLM their mood tags.
     cfg.llm.system_prompt += getattr(_TTS_ENGINES[tts_engine], "prompt_instructions", "")
     procs = ManagedProcesses(cfg)

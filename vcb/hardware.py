@@ -31,6 +31,31 @@ def gpu_backend() -> str:
     return "rocm" if getattr(torch.version, "hip", None) else "cuda"
 
 
+def bypass_miopen_rnn() -> None:
+    """Run LSTM/GRU/RNN layers on torch's native GPU kernels instead of MIOpen.
+    MIOpen's RNN path sets up a dropout descriptor whose HIP kernel is compiled
+    at runtime and includes rocrand headers that AMD's Windows torch wheels
+    don't ship ("'rocrand/rocrand_xorwow.h' file not found" ->
+    miopenStatusUnknownError on Kokoro's first synthesis). Convolutions keep
+    using MIOpen. Idempotent."""
+    import functools
+
+    import torch
+
+    for cls in (torch.nn.LSTM, torch.nn.GRU, torch.nn.RNN):
+        forward = cls.forward
+        if getattr(forward, "_vcb_no_miopen", False):
+            continue
+
+        @functools.wraps(forward)
+        def _forward(self, *args, _orig=forward, **kwargs):
+            with torch.backends.cudnn.flags(enabled=False):
+                return _orig(self, *args, **kwargs)
+
+        _forward._vcb_no_miopen = True
+        cls.forward = _forward
+
+
 def _stt_to_cpu(cfg: AppConfig) -> None:
     cfg.stt.device = "cpu"
     if cfg.stt.engine != "parakeet":
