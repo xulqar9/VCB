@@ -119,8 +119,9 @@ in the settings and the next `VCB.bat` start downloads just that engine
 (one-time, 2–8 GB); the settings window tells you what's installed.
 
 - **Clone a voice — fast (Chatterbox)** — pick a 5–15 s `.wav` of clean speech
-  in the settings. No file? It uses a pleasant built-in voice. Needs an NVIDIA
-  GPU or a [supported AMD Radeon](#-requirements).
+  in the settings. No file? It uses a pleasant built-in voice. Besides laughs
+  and sighs it can whisper and sound happy, angry, sarcastic, … on cue. Needs an
+  NVIDIA GPU or a [supported AMD Radeon](#-requirements).
 - **Clone a voice — emotional (IndexTTS-2.5)** — your voice sample, plus real
   emotion: the assistant tags each sentence with a mood (`<excited>`,
   `<playful>`, `<sad>`, `<angry>`, `<surprised>`, …) and the voice acts it. The
@@ -134,7 +135,9 @@ in the settings and the next `VCB.bat` start downloads just that engine
 - **Clone a voice — classic (XTTS v2)** — Coqui's multilingual cloner; older
   and slower to start than Chatterbox.
 - **Preset voice — expressive (Orpheus)** — eight built-in voices with natural
-  laughs and sighs from a 3B llama.cpp model. NVIDIA GPU only.
+  laughs and sighs from a 3B llama.cpp model. `VCB_ORPHEUS_MODEL` can point at
+  other weights (`owner/repo/file.gguf` on HuggingFace or a local `.gguf`), but
+  larger quants are slower without sounding clearly better. NVIDIA GPU only.
 - **Conversational (Sesame CSM-1B)** — lively, conversational delivery; seeds
   its voice from `VCB_CSM_REF_AUDIO` + its exact transcript, or invents one.
 

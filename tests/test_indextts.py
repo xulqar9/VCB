@@ -17,7 +17,7 @@ from vcb.config import AppConfig, ChunkerConfig, TTSConfig
 from vcb.hardware import adapt_to_hardware
 from vcb.sanitize import sanitize_for_speech
 from vcb.tts.indextts_tts import (
-    IndexTTSEngine, choose_gpus, emotion_vector, split_moods, trim_voice_sample,
+    MOODS, IndexTTSEngine, choose_gpus, emotion_vector, split_moods, trim_voice_sample,
 )
 
 
@@ -42,7 +42,17 @@ def test_emotion_vector_scaling():
     assert emotion_vector(None, 1.0) is None
     assert emotion_vector("sad", 0.0) == [0.0] * 8
     strong = emotion_vector("excited", 5.0)
-    assert abs(sum(strong) - 1.0) < 1e-9          # never above a full emotion
+    assert abs(sum(strong) - 0.8) < 1e-9          # IndexTTS's cap: voice style remains
+
+
+def test_emotion_vector_matches_indextts_normalization():
+    # Same result as IndexTTS's own normalize_emo_vec(apply_bias=True).
+    bias = [0.9375, 0.875, 1.0, 1.0, 0.9375, 0.9375, 0.6875, 0.5625]
+    for mood in ("happy", "excited", "playful", "sad", "angry", "surprised", "afraid"):
+        raw = [v * b for v, b in zip(MOODS[mood], bias)]
+        want = [v * 0.8 / sum(raw) for v in raw] if sum(raw) > 0.8 else raw
+        assert emotion_vector(mood, 1.0) == pytest.approx(want)
+        assert sum(emotion_vector(mood, 1.0)) <= 0.8 + 1e-9
 
 
 def test_sanitize_keeps_mood_tags_only_for_mood_engines():
@@ -102,7 +112,8 @@ def test_worker_round_trip_with_moods(engine):
 
     first, carried = asyncio.run(run())
     assert [len(a) for a in first] == [len("Yes!"), len("Oh.")]
-    assert first[0][0] == pytest.approx(0.68) and first[1][0] == 0.0   # excited / sad
+    assert first[0][0] == pytest.approx(emotion_vector("excited", 1.0)[0])  # excited
+    assert first[1][0] == 0.0                                              # sad
     assert len(carried) == len("Still sad.") and carried[0] == 0.0     # sad carried over
 
 

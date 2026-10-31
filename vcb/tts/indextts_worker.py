@@ -43,6 +43,9 @@ def main() -> int:
     ap.add_argument("--fp32", action="store_true", help="full precision: ~3x slower")
     ap.add_argument("--steps", type=int, default=25,
                     help="mel diffusion steps (IndexTTS uses 25; fewer = faster)")
+    ap.add_argument("--beams", type=int, default=3,
+                    help="beam search width of the speech-token model (IndexTTS uses 3; "
+                         "1 = faster)")
     ap.add_argument("--prepare", action="store_true",
                     help="only download the helper models IndexTTS fetches on first load")
     args = ap.parse_args()
@@ -80,7 +83,7 @@ def main() -> int:
 
     def synth(text, emo):
         sr, wav = tts.infer(spk_audio_prompt=voice, text=text, output_path=None,
-                            lang="EN", emo_vector=emo)
+                            lang="EN", emo_vector=emo, num_beams=max(1, args.beams))
         return sr, (np.asarray(wav, dtype=np.float32).reshape(-1) / 32767.0)
 
     sr, _ = synth("Hello there, nice to meet you.", None)   # pay first-call costs now

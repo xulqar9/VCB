@@ -162,8 +162,10 @@ class Orchestrator:
         self.stt = stt
         self.llm = llm
         self.tts = tts
-        # Tone-of-voice tags the engine acts (IndexTTS's <excited>, <sad>, ...).
-        self._mood_tags: frozenset[str] = frozenset(getattr(tts, "mood_tags", ()))
+        # Tags the engine performs beyond the common emotion tags: tone-of-voice
+        # moods (IndexTTS's <excited>, <sad>, ...) and extra sounds (Turbo's <whisper>).
+        self._mood_tags: frozenset[str] = (frozenset(getattr(tts, "mood_tags", ()))
+                                           | frozenset(getattr(tts, "extra_tags", ())))
         # Engines that sound robotic on short fragments ask for bigger chunks.
         self._chunker_cfg = dataclasses.replace(
             cfg.chunker, **getattr(tts, "chunker_overrides", {}))

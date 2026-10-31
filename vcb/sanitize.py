@@ -96,8 +96,9 @@ def _paren(m: "re.Match[str]") -> str:
 
 def sanitize_for_speech(text: str, keep_emotion_tags: bool = False,
                         mood_tags: "frozenset[str] | set[str]" = frozenset()) -> str:
-    """`mood_tags`: extra <tag> names the engine acts as a tone of voice
-    (IndexTTS's <excited>, <sad>, ...); they're kept, like voiced emotion tags."""
+    """`mood_tags`: extra <tag> names the engine performs beyond the common
+    emotion tags (IndexTTS's <excited>, <sad>, ...; Chatterbox-Turbo's
+    <whisper>, <angry>, ...); they're kept, like voiced emotion tags."""
     text = _SMART_RE.sub(lambda m: _SMART[m.group()], text)
     text = _LIST_MARKER.sub("", text)       # spoken lists: just the items
     text = re.sub(r"[ \t]*\n+[ \t]*", " ", text)

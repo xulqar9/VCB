@@ -32,6 +32,14 @@ _TURBO_TAGS = {
 }
 _ANGLE_TAG = re.compile(r"<\s*([a-zA-Z_]+)\s*>")
 
+PROMPT_INSTRUCTIONS = (
+    "\n\nYOUR VOICE\n"
+    "Besides any emotion tags above, your voice can also perform these inline tags: "
+    "<whisper>, <happy>, <angry>, <surprised>, <sarcastic>, <dramatic>, <fear>, "
+    "<crying>, <shush>, <clear_throat>. Use them sparingly, only when they truly fit. "
+    "Tags are silent cues for your voice, never spoken."
+)
+
 
 def _to_turbo_tags(text: str) -> str:
     return _ANGLE_TAG.sub(
@@ -42,6 +50,8 @@ def _to_turbo_tags(text: str) -> str:
 class ChatterboxTurboTTS(TTSEngine):
     sample_rate = 24_000
     supports_tags = True
+    extra_tags = frozenset(_TURBO_TAGS)
+    prompt_instructions = PROMPT_INSTRUCTIONS
 
     def __init__(self, cfg: TTSConfig) -> None:
         self.cfg = cfg
@@ -59,11 +69,11 @@ class ChatterboxTurboTTS(TTSEngine):
 
             model = _Turbo.from_pretrained(device=self.cfg.device)
             if has_voice:
-                model.prepare_conditionals(voice, exaggeration=self.cfg.exaggeration)
+                model.prepare_conditionals(voice)
             # The first generation pays one-time costs (lazy watermarker load,
             # CUDA kernel selection, allocator growth) -- several seconds live.
             # Pay them now instead of on the user's first reply.
-            model.generate("Hello there, nice to meet you.")
+            model.generate("Hello there, nice to meet you.", **self._sampling())
             return model
 
         self._model = await asyncio.to_thread(_load)
@@ -73,12 +83,21 @@ class ChatterboxTurboTTS(TTSEngine):
             self.sample_rate, voice if has_voice else "built-in",
         )
 
+    def _sampling(self) -> dict:
+        return {
+            "temperature": self.cfg.chatterbox_temperature,
+            "top_p": self.cfg.chatterbox_top_p,
+            "top_k": self.cfg.chatterbox_top_k,
+            "repetition_penalty": self.cfg.chatterbox_repetition_penalty,
+        }
+
     async def synthesize(self, text: str) -> np.ndarray:
         assert self._model is not None, "call load() first"
         text = _to_turbo_tags(text)
+        sampling = self._sampling()
 
         def _run() -> np.ndarray:
-            wav = self._model.generate(text)
+            wav = self._model.generate(text, **sampling)
             return wav.squeeze(0).detach().cpu().numpy().astype(np.float32)
 
         return await asyncio.to_thread(_run)

@@ -9,6 +9,9 @@ import numpy as np
 class TTSEngine(ABC):
     sample_rate: int
     supports_tags: bool = False          # True if engine voices <laugh>/<sigh> etc.
+    # Further <tag> names the engine performs beyond the common emotion tags
+    # (kept by the sanitizer instead of dropped), e.g. Turbo's <whisper>.
+    extra_tags: frozenset[str] = frozenset()
 
     @abstractmethod
     async def load(self) -> None: ...

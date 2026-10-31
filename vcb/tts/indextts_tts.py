@@ -52,6 +52,10 @@ MOODS: dict[str, list[float] | None] = {
     "afraid":    [0.00, 0, 0.08, 0.48, 0, 0, 0.08, 0.00],
     "calm":      None,
 }
+# IndexTTS's normalize_emo_vec: per-emotion bias (same order as above) and the
+# highest total emotion weight it allows.
+_EMO_BIAS = (0.9375, 0.875, 1.0, 1.0, 0.9375, 0.9375, 0.6875, 0.5625)
+_EMO_MAX = 0.8
 
 PROMPT_INSTRUCTIONS = (
     "\n\nYOUR VOICE\n"
@@ -87,12 +91,16 @@ def split_moods(text: str, mood: str | None) -> tuple[list[tuple[str | None, str
 
 
 def emotion_vector(mood: str | None, strength: float) -> list[float] | None:
+    """The mood's emotion vector, scaled by `strength`, then normalized the way
+    IndexTTS's own UI does (normalize_emo_vec): emotions that tend to sound
+    strange are de-emphasized and the total is capped at 0.8, so some of the
+    voice sample's own style always remains."""
     vec = MOODS.get(mood or "")
     if vec is None:
         return None
-    scaled = [max(0.0, v * strength) for v in vec]
+    scaled = [max(0.0, v * strength * b) for v, b in zip(vec, _EMO_BIAS)]
     total = sum(scaled)
-    return [v / total for v in scaled] if total > 1.0 else scaled
+    return [v * _EMO_MAX / total for v in scaled] if total > _EMO_MAX else scaled
 
 
 def runtime_python(runtime_dir: str) -> Path:
@@ -238,7 +246,8 @@ class IndexTTSEngine(TTSEngine):
             )
         voice = trim_voice_sample(Path(voice), Path(resolve_path(self.cfg.indextts_dir)) / "voices")
         cmd = [str(python), str(WORKER), "--model-dir", str(model_dir),
-               "--voice", str(voice), "--steps", str(self.cfg.indextts_steps)]
+               "--voice", str(voice), "--steps", str(self.cfg.indextts_steps),
+               "--beams", str(self.cfg.indextts_num_beams)]
         if not self.cfg.indextts_bf16:
             cmd.append("--fp32")
         return cmd

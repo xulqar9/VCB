@@ -238,10 +238,20 @@ class TTSConfig:
     # "cuda:N" = that GPU, "cpu"); main.py drops to cpu if there's no GPU.
     device: str = "cuda"
     language: str = "en"                 # xtts language
-    exaggeration: float = 0.5            # chatterbox emotion intensity (0-1)
+    # chatterbox-turbo sampling (Turbo's own defaults). Turbo has no
+    # exaggeration/CFG control: expression comes from its [tags].
+    chatterbox_temperature: float = 0.8
+    chatterbox_top_p: float = 0.95
+    chatterbox_top_k: int = 1000
+    chatterbox_repetition_penalty: float = 1.2
     # orpheus (preset voices, emits <laugh>/<sigh>/etc.)
     orpheus_voice: str = field(                   # tara leah jess leo dan mia zac zoe
         default_factory=lambda: _env_str("VCB_ORPHEUS_VOICE", "tara"))
+    # Model weights: "owner/repo/file.gguf" on HuggingFace, or a local .gguf
+    # path. Empty = orpheus-cpp's built-in Q4_K_M. Bigger quants aren't clearly
+    # better and are slower: Q8_0 measured ~1.0x real-time on an RTX 3090 Ti
+    # (stutters) vs ~1.6x for Q4_K_M.
+    orpheus_model: str = field(default_factory=lambda: _env_str("VCB_ORPHEUS_MODEL", ""))
     orpheus_n_gpu_layers: int = -1       # -1 = offload all layers to GPU
     orpheus_n_ctx: int = 8192            # cap context; 0 would grab a 14GB KV cache
     orpheus_pre_buffer_s: float = 0.5    # lower = faster first audio
@@ -249,6 +259,9 @@ class TTSConfig:
     orpheus_top_p: float = 0.95
     orpheus_top_k: int = 40
     orpheus_min_p: float = 0.05
+    # Orpheus needs >= 1.1 for stable speech (no mumbling/looping); higher
+    # also makes it talk faster. llama.cpp's default (1.0) disables it.
+    orpheus_repeat_penalty: float = 1.1
     # sesame csm (transformers CsmForConditionalGeneration, Mimi codec @ 24 kHz)
     csm_model_id: str = "unsloth/csm-1b"  # ungated mirror; "sesame/csm-1b" needs granted access
     csm_device: str = "cuda:0"           # first visible GPU (see VCB_CUDA_DEVICES)
@@ -277,6 +290,8 @@ class TTSConfig:
     indextts_steps: int = 25             # mel diffusion steps (IndexTTS default);
                                          # fewer is faster but audibly rougher
     indextts_bf16: bool = True           # False = fp32: ~3x slower
+    indextts_num_beams: int = 3          # IndexTTS default; 1 measured no faster on
+                                         # an RTX 3090 Ti (diffusion/vocoder dominate)
     indextts_emotion_strength: float = 1.0  # scales the mood vectors (0 = neutral)
     chunk_queue_max: int = 8             # pending text chunks awaiting synthesis
 
