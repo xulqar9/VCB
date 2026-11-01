@@ -123,9 +123,9 @@ in the settings and the next `VCB.bat` start downloads just that engine
   and sighs it can whisper and sound happy, angry, sarcastic, … on cue. Needs an
   NVIDIA GPU or a [supported AMD Radeon](#-requirements).
 - **Clone a voice — emotional (IndexTTS-2.5)** — your voice sample, plus real
-  emotion: the assistant tags each sentence with a mood (`<excited>`,
-  `<playful>`, `<sad>`, `<angry>`, `<surprised>`, …) and the voice acts it. The
-  most human-sounding option, but it takes a few seconds before it starts
+  emotion: the assistant chooses a mood from the conversation when its delivery
+  genuinely changes; the mood carries forward, so most replies need no new tag.
+  The most human-sounding option, but it takes a few seconds before it starts
   talking. NVIDIA GPU only, ~6.4 GB per copy: with **Voice GPU = Auto** a second
   copy runs on another GPU that has room, rendering the next part of a reply
   while the current one plays (or pin it to one GPU in the settings). It runs in its own Python (it pins different library

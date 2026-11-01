@@ -24,13 +24,14 @@ def test_messages_basic_order():
 def test_blocks_injected_in_expected_order():
     m = _mgr()
     m.add_user("hi")
-    msgs = m.messages(resume_hint="RESUME", memory_block="MEM", tools_block="TOOLS")
+    msgs = m.messages(resume_hint="RESUME", memory_block="MEM", tools_block="TOOLS",
+                      turn_instructions="VOICE")
     roles = [x["content"] for x in msgs]
-    # system, tools, memory, then recent turns, then transient resume hint last
+    # system, tools, memory, recent turns, resume hint, then turn-specific guidance
     assert roles[0] == "SYS"
     assert roles[1] == "TOOLS"
     assert roles[2] == "MEM"
-    assert roles[-1] == "RESUME"
+    assert roles[-2:] == ["RESUME", "VOICE"]
     assert "hi" in roles
 
 
@@ -64,6 +65,23 @@ def test_assistant_text_is_stripped():
     m = _mgr()
     m.add_assistant("  spaced  ")
     assert m.last_assistant() == "spaced"
+
+
+def test_only_latest_assistant_turn_keeps_emotion_tags_in_context():
+    m = _mgr()
+    m.add_assistant("<laugh>That was funny.")
+    m.add_user("What was?")
+    m.add_assistant("<happy>That joke you told.")
+    m.add_user("Why?")
+
+    turns = [x for x in m.messages() if x["role"] != "system"]
+    assert turns == [
+        {"role": "assistant", "content": "That was funny."},
+        {"role": "user", "content": "What was?"},
+        {"role": "assistant", "content": "<happy>That joke you told."},
+        {"role": "user", "content": "Why?"},
+    ]
+    assert m.last_assistant() == "<happy>That joke you told."
 
 
 def test_back_to_back_user_utterances_merge():

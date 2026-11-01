@@ -59,13 +59,15 @@ _EMO_MAX = 0.8
 
 PROMPT_INSTRUCTIONS = (
     "\n\nYOUR VOICE\n"
-    "Your voice carries real emotion, so let it show how you actually feel. Start "
-    "every reply with ONE mood tag, and add a new one only when your mood genuinely "
-    "shifts mid-reply. Moods: " + ", ".join(f"<{m}>" for m in MOODS) + ".\n"
-    "The tag is silent - it only sets your tone of voice, it is never spoken. These "
-    "mood tags are allowed in angle brackets in addition to any other tags you use.\n"
-    'Example: "<excited> No way, you actually did it! <playful> Took you long enough, '
-    'though."'
+    "Let your voice follow the emotional context of the conversation, not a fixed "
+    "persona mood. Most replies need no new tag. Available mood tags: "
+    + ", ".join(f"<{m}>" for m in MOODS) + ".\n"
+    "A mood tag is silent and carries forward through later chunks and replies. "
+    "Use one only when the delivery genuinely changes; do not repeat the current "
+    "mood at the start of every reply. Place a tag where the change begins. Use "
+    "<calm> only when you want to return to the voice sample's unsteered delivery. "
+    "When the current mood already fits, leave it unchanged and say the words "
+    "naturally. Never add a mood just to decorate a response."
 )
 
 _MOOD_TAG = re.compile(r"<\s*(" + "|".join(MOODS) + r")\s*>", re.IGNORECASE)
@@ -225,9 +227,27 @@ class IndexTTSEngine(TTSEngine):
         self._jobs: queue.Queue = queue.Queue()
         self._alive = 0
         self._alive_lock = threading.Lock()
-        # Chunks queued for speech, rendering ahead: (text, futures per mood segment).
-        self._pending: collections.deque[tuple[str, list[Future]]] = collections.deque()
+        # Chunks queued for speech, rendering ahead: text, futures per mood
+        # segment, and the final carried mood after that chunk.
+        self._pending: collections.deque[
+            tuple[str, list[tuple[Future, str | None]], str | None]
+        ] = collections.deque()
         self._mood: str | None = None
+        self._queued_mood: str | None = None
+
+    def turn_instructions(self) -> str:
+        if self._mood is None:
+            return (
+                "Current IndexTTS delivery: the voice sample's natural, unsteered "
+                "style; no mood is active. Only set a mood if this reply's context "
+                "calls for a real change."
+            )
+        return (
+            f"Current IndexTTS delivery is still <{self._mood}> from the previous "
+            "speech. That mood carries across replies; do not repeat its tag unless "
+            "the conversation genuinely calls for a different delivery. Use another "
+            "mood tag only at the point where that change begins."
+        )
 
     def _command(self) -> list[str]:
         python = runtime_python(self.cfg.indextts_dir)
@@ -328,42 +348,50 @@ class IndexTTSEngine(TTSEngine):
                 if job is not None and job[2].set_running_or_notify_cancel():
                     job[2].set_exception(RuntimeError("all IndexTTS workers stopped"))
 
-    def _submit(self, text: str) -> list[Future]:
+    def _submit(self, text: str) -> tuple[list[tuple[Future, str | None]], str | None]:
         if self._alive <= 0:
             raise RuntimeError("IndexTTS is not running")
-        segments, self._mood = split_moods(text, self._mood)
+        segments, final_mood = split_moods(text, self._queued_mood)
+        self._queued_mood = final_mood
         futures = []
         for mood, words in segments:
             fut: Future = Future()
             self._jobs.put((words, emotion_vector(mood, self.cfg.indextts_emotion_strength), fut))
-            futures.append(fut)
-        return futures
+            futures.append((fut, mood))
+        return futures, final_mood
 
     def prepare(self, text: str) -> None:
         """Start rendering a chunk as soon as it's queued for speech (called in
         speaking order), so a free copy works ahead of playback."""
-        self._pending.append((text, self._submit(text)))
+        futures, final_mood = self._submit(text)
+        self._pending.append((text, futures, final_mood))
 
     def cancel_pending(self) -> None:
         """Barge-in: drop every chunk rendered ahead that hasn't started yet."""
         while self._pending:
-            for fut in self._pending.popleft()[1]:
+            for fut, _ in self._pending.popleft()[1]:
                 fut.cancel()
+        self._queued_mood = self._mood
 
-    def _take(self, text: str) -> list[Future]:
+    def _take(self, text: str) -> tuple[list[tuple[Future, str | None]], str | None]:
         while self._pending:
-            queued, futures = self._pending.popleft()
+            queued, futures, final_mood = self._pending.popleft()
             if queued == text:
-                return futures
-            for fut in futures:          # skipped by the speech loop (stale)
+                return futures, final_mood
+            for fut, _ in futures:       # skipped by the speech loop (stale)
                 fut.cancel()
+            self.cancel_pending()
+            return self._submit(text)
         return self._submit(text)
 
     async def synthesize_stream(self, text: str):
-        for fut in self._take(text):
+        futures, final_mood = self._take(text)
+        for fut, mood in futures:
             audio = await asyncio.wrap_future(fut)
             if len(audio):
                 yield audio
+                self._mood = mood
+        self._mood = final_mood
 
     async def synthesize(self, text: str) -> np.ndarray:
         parts = [a async for a in self.synthesize_stream(text)]

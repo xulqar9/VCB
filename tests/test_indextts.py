@@ -17,7 +17,12 @@ from vcb.config import AppConfig, ChunkerConfig, TTSConfig
 from vcb.hardware import adapt_to_hardware
 from vcb.sanitize import sanitize_for_speech
 from vcb.tts.indextts_tts import (
-    MOODS, IndexTTSEngine, choose_gpus, emotion_vector, split_moods, trim_voice_sample,
+    MOODS,
+    IndexTTSEngine,
+    choose_gpus,
+    emotion_vector,
+    split_moods,
+    trim_voice_sample,
 )
 
 
@@ -59,6 +64,20 @@ def test_sanitize_keeps_mood_tags_only_for_mood_engines():
     moods = IndexTTSEngine.mood_tags
     assert sanitize_for_speech("<excited> We won!", False, moods) == "<excited> We won!"
     assert sanitize_for_speech("<excited> We won!") == "We won!"
+
+
+def test_index_prompt_does_not_force_a_tag_every_reply():
+    assert "Most replies need no new tag" in IndexTTSEngine.prompt_instructions
+    assert "Start every reply" not in IndexTTSEngine.prompt_instructions
+
+
+def test_index_turn_guidance_reports_carried_mood():
+    engine = IndexTTSEngine(TTSConfig())
+    assert "no mood is active" in engine.turn_instructions()
+    engine._mood = "sad"
+    guidance = engine.turn_instructions()
+    assert "<sad>" in guidance
+    assert "do not repeat its tag" in guidance
 
 
 FAKE_WORKER = textwrap.dedent("""
@@ -115,6 +134,23 @@ def test_worker_round_trip_with_moods(engine):
     assert first[0][0] == pytest.approx(emotion_vector("excited", 1.0)[0])  # excited
     assert first[1][0] == 0.0                                              # sad
     assert len(carried) == len("Still sad.") and carried[0] == 0.0     # sad carried over
+
+
+def test_mood_context_uses_spoken_not_prefetched_chunks(engine):
+    engine.prepare("<sad> queued.")
+    assert "no mood is active" in engine.turn_instructions()
+    engine.cancel_pending()
+    assert "no mood is active" in engine.turn_instructions()
+
+    async def speak():
+        return await engine.synthesize("<sad> actually spoken.")
+
+    assert len(asyncio.run(speak())) > 0
+    assert "<sad>" in engine.turn_instructions()
+    engine.prepare("<happy> rendered ahead.")
+    assert "<sad>" in engine.turn_instructions()
+    engine.cancel_pending()
+    assert "<sad>" in engine.turn_instructions()
 
 
 def test_worker_error_returns_silence_and_keeps_serving(engine):

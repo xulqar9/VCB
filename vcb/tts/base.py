@@ -12,6 +12,12 @@ class TTSEngine(ABC):
     # Further <tag> names the engine performs beyond the common emotion tags
     # (kept by the sanitizer instead of dropped), e.g. Turbo's <whisper>.
     extra_tags: frozenset[str] = frozenset()
+    prompt_instructions = (
+        "\n\nVOCAL DELIVERY\n"
+        "Let your wording and punctuation reflect the conversation naturally. "
+        "Do not emit inline emotion or vocal-reaction tags; this voice engine "
+        "does not perform them."
+    )
 
     @abstractmethod
     async def load(self) -> None: ...
@@ -30,4 +36,3 @@ class TTSEngine(ABC):
 
     @abstractmethod
     async def close(self) -> None: ...
-

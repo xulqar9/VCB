@@ -168,6 +168,40 @@ async def _drive_turn(orch, transcript):
     await task
 
 
+def test_synthesized_reply_receives_dynamic_voice_context():
+    class _ContextTTS(_FakeTTS):
+        def turn_instructions(self):
+            return "Current voice mood is <sad>."
+
+    class _RecordingLLM(_FakeLLM):
+        def __init__(self):
+            super().__init__(["I hear you."])
+            self.messages_seen = []
+
+        async def stream(self, messages, temperature=None, max_tokens=None):
+            self.messages_seen.append(messages)
+            async for delta in super().stream(messages, temperature, max_tokens):
+                yield delta
+
+    async def _run():
+        llm = _RecordingLLM()
+        cfg = AppConfig()
+        cfg.memory.enabled = False
+        cfg.skills.enabled = False
+        cfg.proactive.enabled = False
+        cfg.avatar.enabled = False
+        orch = Orchestrator(cfg, _FakeSTT(), llm, _ContextTTS())
+        await _drive_turn(orch, "I had a hard day.")
+        return llm
+
+    llm = asyncio.run(_run())
+    assert llm.messages_seen
+    assert llm.messages_seen[0][-1] == {
+        "role": "system",
+        "content": "Current voice mood is <sad>.",
+    }
+
+
 def test_resume_survives_short_backchannel():
     """A brief backchannel that the model just acknowledges must not burn the
     resume offer -- a later 'continue' should still resume."""
@@ -257,7 +291,6 @@ def test_vad_warns_when_sound_never_pauses(caplog):
     assert "without a pause" in caplog.text
     assert isinstance(seg.events.get_nowait(), SpeechStart)
     assert isinstance(seg.events.get_nowait(), SpeechEnd)
-
     caplog.clear()
     seg = VADSegmenter(VADConfig(max_utterance_s=2.0), audio)
     probs = iter([1.0] * 20 + [0.0] * 40)           # speech, then silence
@@ -268,6 +301,52 @@ def test_vad_warns_when_sound_never_pauses(caplog):
     assert "without a pause" not in caplog.text
     assert isinstance(seg.events.get_nowait(), SpeechStart)
     assert isinstance(seg.events.get_nowait(), SpeechEnd)
+
+
+def test_recalled_assistant_tags_are_removed_from_memory_context():
+    from vcb.clock import Clock
+    from vcb.config import AppConfig
+    from vcb.orchestrator import Orchestrator
+
+    class _Memory:
+        def __init__(self):
+            self.ts = Clock().now().timestamp() - 3600
+
+        def facts_block(self):
+            return "Likes calm chats."
+
+        def latest_summary_entry(self):
+            return ("She said <happy> during a funny story.", self.ts)
+
+        def recall_entries(self, qvec, top_k, min_similarity, exclude):
+            return [
+                (self.ts, "assistant", "<laugh>That was funny."),
+                (self.ts, "user", "I like the <happy> voice."),
+            ]
+
+        def add_turn(self, *args):
+            pass
+
+    class _Embedder:
+        def embed_query(self, text):
+            return []
+
+        def embed_one(self, text):
+            return []
+
+    async def _run():
+        orch = object.__new__(Orchestrator)
+        orch.cfg = AppConfig()
+        orch._memory = _Memory()
+        orch._embedder = _Embedder()
+        orch._session_id = "test"
+        orch.clock = Clock()
+        return await orch._remember_user("question")
+
+    block = asyncio.run(_run())
+    assert "She said during a funny story." in block
+    assert "assistant: That was funny." in block
+    assert "user: I like the <happy> voice." in block
 
 
 def test_queued_chunks_carry_their_turns_metrics():

@@ -745,8 +745,10 @@ class Orchestrator:
             if returning:
                 hint = f"{hint}\n\n{returning}" if hint else returning
 
-            messages = self.convo.messages(hint, memory_block, self._tools_block,
-                                           self._now_block())
+            messages = self.convo.messages(
+                hint, memory_block, self._tools_block, self._now_block(),
+                self._tts_turn_instructions(),
+            )
             await self._speak_reply(messages, m, resuming=resuming)
         except asyncio.CancelledError:
             raise
@@ -861,7 +863,8 @@ class Orchestrator:
         # What she knows about the user (no recall query: nothing was said),
         # so a greeting can follow up on last time.
         profile = await self._profile_block()
-        messages = self.convo.messages(None, profile, None, self._now_block())
+        messages = self.convo.messages(
+            None, profile, None, self._now_block(), self._tts_turn_instructions())
         messages.append({"role": "user", "content": cue})
         await self._speak_reply(messages, m, temperature=p.lead_temperature,
                                 max_tokens=p.lead_max_tokens, unprompted=unprompted,
@@ -1117,7 +1120,8 @@ class Orchestrator:
             now = self.clock.now()
             # When it was said matters: "next Monday" from 2 weeks ago is past.
             parts.append("Other things you remember that may be relevant:\n" + "\n".join(
-                f"- ({self.clock.ago(ts, now)}) {role}: {line}"
+                f"- ({self.clock.ago(ts, now)}) {role}: "
+                f"{strip_speech_tags(line) if role == 'assistant' else line}"
                 for ts, role, line in entries))
         if not parts:
             return None
@@ -1128,11 +1132,11 @@ class Orchestrator:
     def _profile_parts(self, facts: str, summary: tuple[str, float] | None) -> list[str]:
         parts: list[str] = []
         if facts:
-            parts.append(f"What you know about {USER_NAME}:\n" + facts)
+            parts.append(f"What you know about {USER_NAME}:\n" + strip_speech_tags(facts))
         if summary:
             text, ts = summary
             parts.append(f"Summary of earlier conversation (updated "
-                         f"{self.clock.ago(ts)}):\n{text}")
+                         f"{self.clock.ago(ts)}):\n{strip_speech_tags(text)}")
         return parts
 
     async def _profile_block(self) -> str | None:
@@ -1161,6 +1165,11 @@ class Orchestrator:
         elif self._memory is not None:
             line += f" This is your first conversation with {self._user_label()}."
         return line
+
+    def _tts_turn_instructions(self) -> str | None:
+        """Engine-specific context that changes during the conversation."""
+        instructions = getattr(self.tts, "turn_instructions", None)
+        return instructions() if callable(instructions) else None
 
     # -- reminders ---------------------------------------------------------
 

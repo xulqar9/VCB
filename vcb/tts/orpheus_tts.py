@@ -29,6 +29,16 @@ ORPHEUS_TAGS = frozenset(
     {"laugh", "chuckle", "sigh", "cough", "sniffle", "groan", "yawn", "gasp"})
 _TAG_ALIASES = {"giggle": "chuckle"}
 _ANGLE_TAG = re.compile(r"<\s*([a-zA-Z_]+)\s*>")
+PROMPT_INSTRUCTIONS = (
+    "\n\nVOCAL DELIVERY\n"
+    "Let your reactions follow what the user actually said; most replies need no "
+    "vocal tag. Use <laugh> or <chuckle> only when something is genuinely funny, "
+    "<sigh> for a real moment of frustration, disappointment, or relief, and "
+    "<gasp> only for real surprise. Use <cough>, <sniffle>, <groan>, or <yawn> "
+    "only when the conversation makes that reaction natural. Put a tag where the "
+    "reaction happens, not automatically at the start. Never add a tag just to "
+    "decorate a reply or repeat one because it appeared in an earlier answer."
+)
 
 
 def to_orpheus_tags(text: str) -> str:
@@ -141,6 +151,7 @@ class _StoppableLLM:
 class OrpheusTTS(TTSEngine):
     sample_rate = 24_000
     supports_tags = True
+    prompt_instructions = PROMPT_INSTRUCTIONS
     # Orpheus streams within a chunk (first audio ~0.5 s whatever its length),
     # so a bigger first chunk costs little latency, while a lone "Hey," comes
     # out flat and every chunk boundary restarts the delivery.
@@ -301,4 +312,3 @@ class OrpheusTTS(TTSEngine):
     async def close(self) -> None:
         self._stop.set()
         self._model = None
-

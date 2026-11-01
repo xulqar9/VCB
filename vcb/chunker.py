@@ -69,6 +69,14 @@ class SentenceChunker:
         if m is not None:
             return self._take(m.end())
         if len(self._buf) >= self.cfg.max_chars:
+            # Too long to wait for: never cut mid-sentence while a sentence (or
+            # failing that, a clause) ends in reach, even before min_chars. A
+            # chunk ending "...and I swear the ball" is voiced as a finished
+            # sentence, then the rest starts over as a new one.
+            for pattern in (_SENTENCE_END, _CLAUSE_END):
+                m = self._last_boundary(pattern, self.cfg.max_chars)
+                if m is not None:
+                    return self._take(m.end())
             space = self._buf.rfind(" ", self.cfg.min_chars, self.cfg.max_chars)
             return self._take(space if space > 0 else self.cfg.max_chars)
         return None
@@ -83,6 +91,16 @@ class SentenceChunker:
                 return m
             pos = m.end()
         return None
+
+    def _last_boundary(self, pattern: "re.Pattern[str]", limit: int) -> "re.Match[str] | None":
+        """Last split point ending within `limit` chars, outside any span."""
+        last = None
+        for m in pattern.finditer(self._buf):
+            if m.end() > limit:
+                break
+            if not _inside_action(self._buf[: m.end()]):
+                last = m
+        return last
 
     def _take(self, end: int) -> str:
         chunk, self._buf = self._buf[:end].strip(), self._buf[end:]

@@ -34,10 +34,17 @@ _ANGLE_TAG = re.compile(r"<\s*([a-zA-Z_]+)\s*>")
 
 PROMPT_INSTRUCTIONS = (
     "\n\nYOUR VOICE\n"
-    "Besides any emotion tags above, your voice can also perform these inline tags: "
-    "<whisper>, <happy>, <angry>, <surprised>, <sarcastic>, <dramatic>, <fear>, "
-    "<crying>, <shush>, <clear_throat>. Use them sparingly, only when they truly fit. "
-    "Tags are silent cues for your voice, never spoken."
+    "Let the conversation determine your delivery; most replies need no tag. Use "
+    "these silent tags only when the moment genuinely calls for them: <whisper> "
+    "only when asked to lower your voice or for a naturally private aside; <happy>, "
+    "<angry>, <surprised>, <sarcastic>, <dramatic>, <fear>, or <crying> only when "
+    "that emotion truly shapes the reply; <shush> to hush someone, and <clear_throat> "
+    "for an actual throat-clearing reaction. Use vocal tags such as <laugh>, "
+    "<chuckle>, <giggle>, <sigh>, <gasp>, <cough>, <groan>, and <sniffle> only "
+    "when the conversation prompts them. Place a tag where it applies, not "
+    "automatically at the start. A request to change your voice applies to the "
+    "current response unless the user asks you to keep it that way. Do not repeat "
+    "a tag just because it appeared in an earlier answer."
 )
 
 

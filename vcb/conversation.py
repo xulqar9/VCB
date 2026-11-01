@@ -1,6 +1,7 @@
 """Conversation history with trimming."""
 
 from .config import LLMConfig
+from .sanitize import strip_speech_tags
 
 
 class ConversationManager:
@@ -41,7 +42,8 @@ class ConversationManager:
     def messages(self, resume_hint: str | None = None,
                  memory_block: str | None = None,
                  tools_block: str | None = None,
-                 now_block: str | None = None) -> list[dict[str, str]]:
+                 now_block: str | None = None,
+                 turn_instructions: str | None = None) -> list[dict[str, str]]:
         max_msgs = self.cfg.history_max_turns * 2
         trimmed = self._history[-max_msgs:]
         msgs = [{"role": "system", "content": self.cfg.system_prompt}]
@@ -53,9 +55,22 @@ class ConversationManager:
             msgs.append({"role": "system", "content": now_block})
         if memory_block:  # recalled long-term context, before the recent turns
             msgs.append({"role": "system", "content": memory_block})
-        msgs += trimmed
+        last_assistant = next(
+            (i for i in range(len(trimmed) - 1, -1, -1)
+             if trimmed[i]["role"] == "assistant"),
+            None,
+        )
+        for i, message in enumerate(trimmed):
+            content = message["content"]
+            if message["role"] == "assistant" and i != last_assistant:
+                content = strip_speech_tags(content)
+                if not content:
+                    continue
+            msgs.append({"role": message["role"], "content": content})
         if resume_hint:  # transient nudge for this turn only, not persisted
             msgs.append({"role": "system", "content": resume_hint})
+        if turn_instructions:
+            msgs.append({"role": "system", "content": turn_instructions})
         return msgs
 
     def clear(self) -> None:
