@@ -1,0 +1,6 @@
+# Voice emotion pack: emotion2vec+ through FunASR. The launcher installs this
+# when "Recognize the emotion in your voice" is ticked in the settings
+# (VCB_VOICE_EMOTION=true); the model (~1.1 GB) downloads from Hugging Face
+# on the first start. Install with the same constraints/overrides as
+# requirements.txt (see there).
+funasr==1.4.19

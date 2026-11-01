@@ -82,6 +82,49 @@ def test_active_model_may_be_a_gguf_path():
         resolve_model_preset("not-a-preset")
 
 
+@pytest.mark.parametrize("selection", ["relative", "absolute", "normalized"])
+def test_gguf_path_reuses_matching_preset(tmp_path, monkeypatch, selection):
+    monkeypatch.setattr(config, "_ROOT_DIR", tmp_path)
+    preset = ModelPreset(
+        "custom-label", str(os.path.join("models", "model.gguf")),
+        ctx_size=8192, n_gpu_layers=20,
+        extra_args=("--no-jinja", "--chat-template", "mistral-v3-tekken"),
+    )
+    monkeypatch.setattr(config, "MODEL_PRESETS", {"custom": preset})
+    paths = {
+        "relative": preset.model_path,
+        "absolute": str(tmp_path / preset.model_path),
+        "normalized": str(tmp_path / "models" / ".." / preset.model_path),
+    }
+    assert resolve_model_preset(paths[selection]) == preset
+
+
+def test_gguf_path_does_not_match_only_by_filename(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "_ROOT_DIR", tmp_path)
+    monkeypatch.setattr(config, "MODEL_PRESETS", {
+        "custom": ModelPreset("custom-label", str(tmp_path / "models" / "model.gguf"),
+                              extra_args=("--no-jinja",)),
+    })
+    path = str(tmp_path / "other" / "model.gguf")
+    assert resolve_model_preset(path) == ModelPreset("model", path)
+
+
+def test_llama_cpp_file_selection_preserves_preset_launch_settings(tmp_path, monkeypatch):
+    path = str(tmp_path / "model.gguf")
+    preset = ModelPreset(
+        "custom-label", path, ctx_size=8192, n_gpu_layers=20,
+        extra_args=("--no-jinja", "--chat-template", "mistral-v3-tekken"),
+    )
+    monkeypatch.setattr(config, "MODEL_PRESETS", {"custom": preset})
+    monkeypatch.setattr(config, "ACTIVE_MODEL", path)
+    cfg = AppConfig(backend="llama_cpp")
+    assert cfg.server.model_path == path
+    assert cfg.server.extra_args == preset.extra_args
+    assert cfg.server.ctx_size == preset.ctx_size
+    assert cfg.server.n_gpu_layers == preset.n_gpu_layers
+    assert cfg.llm.model == preset.label
+
+
 def test_public_defaults_are_generic():
     cfg = AppConfig()
     assert cfg.backend == "ollama"

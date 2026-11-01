@@ -104,6 +104,8 @@ def adapt_to_hardware(cfg: AppConfig, tts_engine: str, backend: str) -> str:
     if backend not in BACKENDS:
         raise ValueError(f"unknown GPU backend {backend!r} (use one of: {', '.join(BACKENDS)})")
     _resolve_stt(cfg, backend)
+    if backend == "cpu":
+        cfg.vocal.device = "cpu"
     if backend == "cuda":
         return tts_engine
     if backend == "rocm":
@@ -142,12 +144,13 @@ def place_on_gpus(cfg: AppConfig, tts_engine: str, backend: str) -> None:
     usable = gpu.visible_gpus(os.environ.get("CUDA_VISIBLE_DEVICES"), list(free))
     if not usable or len(usable) < 2:
         return
-    needs = {"stt": gpu.STT_VRAM_GB}
+    needs = {"stt": gpu.STT_VRAM_GB + gpu.vocal_vram_gb(cfg.vocal.sounds, cfg.vocal.emotion)}
     if tts_engine in _PLACEABLE_TTS:
         needs["tts"] = gpu.TTS_VRAM_GB.get(tts_engine, gpu.TTS_VRAM_DEFAULT_GB)
     plan = gpu.plan_placement({i: free[i] for i in usable}, needs)
     logical = {phys: n for n, phys in enumerate(usable)}   # CUDA's index for it
     cfg.stt.device_index = logical[plan["stt"]]
+    cfg.vocal.device = f"cuda:{cfg.stt.device_index}"
     if "tts" in plan:
         cfg.tts.device = f"cuda:{logical[plan['tts']]}"
         cfg.tts.csm_device = cfg.tts.device

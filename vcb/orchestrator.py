@@ -59,6 +59,7 @@ from .turns import is_backchannel, looks_incomplete, mentions_busy, mentions_goo
 from .stt.base import STTEngine
 from .tts.base import TTSEngine
 from .vad import SpeechEnd, SpeechStart, VADEvent, VADSegmenter
+from .vocal import SoundEvent, VocalListener, VoiceAnalysis, lone_sound_text
 
 log = logging.getLogger("vcb.orchestrator")
 
@@ -182,6 +183,11 @@ class Orchestrator:
         self._play_end = 0.0
         self._avatar_end_task: asyncio.Task | None = None
         self.vad = VADSegmenter(cfg.vad, cfg.audio)
+        # Laughs/gasps/sighs, voice emotion and pace/pitch (all opt-in).
+        self.vocal = VocalListener(cfg.vocal, cfg.audio)
+        # Sounds not yet told to the LLM: (event, heard while it was talking).
+        self._pending_sounds: list[tuple[SoundEvent, bool]] = []
+        self._sound_task: asyncio.Task | None = None
         self.convo = ConversationManager(cfg.llm)
         self._name = speaker_name(cfg.llm.system_prompt)
         # The user's clock (their time zone); every reply gets the current
@@ -254,7 +260,8 @@ class Orchestrator:
     async def run(self) -> None:
         log.info("loading models...")
         await asyncio.gather(
-            self.stt.load(), self.llm.load(), self.tts.load(), self.vad.load()
+            self.stt.load(), self.llm.load(), self.tts.load(), self.vad.load(),
+            self.vocal.load(),
         )
         if self._embedder is not None:
             await asyncio.to_thread(self._embedder.load)  # warm the embedder (CPU)
@@ -279,6 +286,9 @@ class Orchestrator:
             loops.append(("idle-loop", self._idle_loop, None))
         if self._memory is not None:
             loops.append(("reminder-loop", self._reminder_loop, None))
+        if self.vocal.sounds is not None:
+            self.vocal.sounds.on_event = self._on_sound
+            loops.append(("sound-loop", self.vocal.sounds.run, None))
         self._tasks = [
             asyncio.create_task(self._supervise(name, fn, on_crash), name=name)
             for name, fn, on_crash in loops
@@ -302,6 +312,8 @@ class Orchestrator:
             self._side_task.cancel()
         if self._lead_watchdog is not None:
             self._lead_watchdog.cancel()
+        if self._sound_task is not None:
+            self._sound_task.cancel()
         for t in self._tasks:
             t.cancel()
         for t in self._tasks:
@@ -379,6 +391,10 @@ class Orchestrator:
                 self.vad.process_frame(frame)
             except Exception:
                 log.exception("VAD error, frame skipped")
+            try:
+                self.vocal.feed(frame)
+            except Exception:
+                log.exception("sound detection error, frame skipped")
 
     async def _event_loop(self) -> None:
         while True:
@@ -411,13 +427,14 @@ class Orchestrator:
         elif isinstance(event, SpeechEnd):
             self._user_speaking = False
             self._last_activity = time.monotonic()
+            sounds = self._claim_utterance_sounds(event.audio)
             overlap, self._overlap_task = self._overlap_task, None
             if overlap is not None and not overlap.done():
                 # A short sound while the assistant talked: what was said
                 # decides whether it stops (see _check_overlap).
                 overlap.cancel()
                 self._side_task = asyncio.create_task(
-                    self._check_overlap(event.audio), name="overlap-check")
+                    self._check_overlap(event.audio, sounds), name="overlap-check")
                 return
             await self._cancel_turn()
             if self.avatar is not None:
@@ -425,7 +442,7 @@ class Orchestrator:
             self._metrics = TurnMetrics()
             self._metrics.mark("t_speech_end")
             self._turn_task = asyncio.create_task(
-                self._run_turn(event.audio), name="turn"
+                self._run_turn(event.audio, sounds=sounds), name="turn"
             )
 
     async def _confirm_barge_in(self) -> None:
@@ -443,32 +460,110 @@ class Orchestrator:
                 return
             await asyncio.sleep(0.03)
 
-    async def _check_overlap(self, audio) -> None:
+    async def _check_overlap(self, audio, sounds: list[SoundEvent] = ()) -> None:
         """A short utterance said while the assistant was talking. A
         backchannel ("yeah", "mhm") is ignored and the assistant carries on;
-        anything else ("wait", "no, stop") interrupts it and gets a reply."""
+        anything else ("wait", "no, stop") interrupts it and gets a reply.
+        A laugh or other sound with it is kept for the next turn."""
         try:
-            text = await self.stt.transcribe(
-                audio, self.cfg.audio.input_sample_rate, self._stt_context())
+            text, analysis = await asyncio.gather(
+                self.stt.transcribe(audio, self.cfg.audio.input_sample_rate,
+                                    self._stt_context()),
+                self.vocal.analyze(audio))
         except Exception:
             log.exception("transcription failed")
             return
-        if not text:
-            return
-        if self.cfg.turn_taking.ignore_backchannels and is_backchannel(text):
-            log.info("backchannel while speaking, carrying on: %r", text)
+        if not text or (self.cfg.turn_taking.ignore_backchannels and is_backchannel(text)):
+            if text:
+                log.info("backchannel while speaking, carrying on: %r", text)
+            self._keep_reply_sounds(sounds)
             return
         log.info("barge-in: interrupting (%r)", text)
         await self._cancel_turn()
         returning = self._accept_user_text(text)
         if self._user_speaking:
+            self._keep_reply_sounds(sounds)
             return            # they kept going; their next words join this message
         if self.avatar is not None:
             self.avatar.state("thinking")
         self._metrics = TurnMetrics()
         self._metrics.mark("t_speech_end")
         self._turn_task = asyncio.create_task(
+            self._run_turn(None, text=text, returning=returning, sounds=sounds,
+                           analysis=analysis), name="turn")
+
+    # -- sounds without words (see vcb.vocal) ------------------------------
+
+    def _claim_utterance_sounds(self, audio) -> list[SoundEvent]:
+        """Sounds heard during the utterance that just ended, or just before
+        it ("(laughs) oh no")."""
+        lane = self.vocal.sounds
+        if lane is None:
+            return []
+        now = time.monotonic()
+        end = now - self.cfg.vad.end_silence_ms / 1000
+        start = end - len(audio) / self.cfg.audio.input_sample_rate
+        return lane.claim(start - 1.5, now)
+
+    def _keep_reply_sounds(self, sounds) -> None:
+        """Sounds made while the assistant talks: told to it on the next turn."""
+        if self.cfg.vocal.sounds_during_reply == "context":
+            self._pending_sounds += [(e, True) for e in sounds]
+
+    def _on_sound(self, _event: SoundEvent) -> None:
+        if self._sound_task is None or self._sound_task.done():
+            self._sound_task = asyncio.create_task(self._settle_sounds(), name="sound-check")
+
+    async def _settle_sounds(self) -> None:
+        """Once a sound is over, handle it if no utterance took it: speech
+        recognition never sees a wordless laugh or gasp."""
+        lane = self.vocal.sounds
+        settle = self.cfg.vad.end_silence_ms / 1000 + 0.4
+        while True:
+            pending = [e for e in lane.events if not e.claimed]
+            if not pending:
+                return
+            wait = max(e.end for e in pending) + settle - time.monotonic()
+            # The mic may still be deciding whether this is speech.
+            if wait <= 0 and not (self.vad.voiced_s > 0 and not self._user_speaking):
+                break
+            await asyncio.sleep(max(wait, 0.1))
+        if self._user_speaking:
+            return            # the utterance in progress takes them when it ends
+        now = time.monotonic()
+        # Older leftovers (missed by an utterance) are too stale to react to.
+        events = [e for e in lane.claim(float("-inf"), float("inf")) if now - e.end < 5.0]
+        if not events:
+            return
+        snap = self._snapshot()
+        if snap.assistant_active:
+            self._keep_reply_sounds(events)
+            return
+        if not self.cfg.vocal.react_to_lone_sounds:
+            self._pending_sounds += [(e, False) for e in events]
+            return
+        self._start_sound_turn(events)
+
+    def _start_sound_turn(self, events: list[SoundEvent]) -> None:
+        """A wordless sound is the user's turn: "(laughs)" gets a reaction."""
+        text = lone_sound_text(events)
+        self._last_activity = time.monotonic()
+        returning = self._accept_user_text(text)
+        if self.avatar is not None:
+            self.avatar.state("thinking")
+        self._metrics = TurnMetrics()
+        self._metrics.mark("t_speech_end")
+        self._turn_task = asyncio.create_task(
             self._run_turn(None, text=text, returning=returning), name="turn")
+
+    def _voice_cue(self, analysis: VoiceAnalysis | None, text: str) -> str | None:
+        """This turn's note on how the user sounded (and what they did
+        while the assistant talked); used once, never stored."""
+        pending, self._pending_sounds = self._pending_sounds, []
+        during = [e for e, while_talking in pending if while_talking]
+        with_words = [e for e, while_talking in pending if not while_talking]
+        notes = self.vocal.describe(analysis, text) if analysis is not None else []
+        return self.vocal.cue(during, with_words, notes)
 
     async def _idle_loop(self) -> None:
         """AI-led mode: when nobody's talking and no reply is in flight, wait
@@ -698,16 +793,21 @@ class Orchestrator:
             self._avatar_speaking = False
 
     async def _run_turn(self, audio, text: str | None = None,
-                        returning: str | None = None) -> None:
+                        returning: str | None = None, sounds: list[SoundEvent] = (),
+                        analysis: VoiceAnalysis | None = None) -> None:
         """Reply to one user utterance. With text=None the audio is
         transcribed first; otherwise the text was already transcribed and
-        recorded by the caller (see _check_overlap)."""
+        recorded by the caller (see _check_overlap). sounds: laughs etc.
+        heard with it; analysis: its voice emotion/traits."""
         m = self._metrics
         turn_gen = self._turn_gen
         try:
             if text is None:
-                text = await self.stt.transcribe(
-                    audio, self.cfg.audio.input_sample_rate, self._stt_context())
+                # Emotion/voice analysis runs alongside speech recognition.
+                text, analysis = await asyncio.gather(
+                    self.stt.transcribe(audio, self.cfg.audio.input_sample_rate,
+                                        self._stt_context()),
+                    self.vocal.analyze(audio))
                 # STT ran in an uncancellable worker thread; if a barge-in
                 # superseded this turn while it ran, drop the obsolete transcript.
                 if turn_gen != self._turn_gen:
@@ -715,6 +815,13 @@ class Orchestrator:
                     return
                 if m:
                     m.mark("t_stt_done")
+                if not text and sounds:
+                    # A laugh/gasp with no words: that's what they "said".
+                    analysis = None
+                    if not self.cfg.vocal.react_to_lone_sounds:
+                        self._pending_sounds += [(e, False) for e in sounds]
+                        return
+                    text, sounds = lone_sound_text(sounds), ()
                 if not text:
                     log.debug("empty transcript, ignoring")
                     return
@@ -725,6 +832,8 @@ class Orchestrator:
             # finish. If they do, this turn is cancelled and their next words
             # join this message (ConversationManager.add_user).
             wait = self.cfg.turn_taking.incomplete_wait_s
+            # Queued so a laugh survives this turn being replaced by the merged one.
+            self._pending_sounds += [(e, False) for e in sounds]
             if wait > 0 and looks_incomplete(text):
                 log.debug("sounds unfinished, waiting %.1fs for more", wait)
                 await asyncio.sleep(wait)
@@ -744,6 +853,10 @@ class Orchestrator:
                     self._resume_pending = False   # window expired without a resume
             if returning:
                 hint = f"{hint}\n\n{returning}" if hint else returning
+            cue = self._voice_cue(analysis, text)
+            if cue:
+                log.info("voice cue: %s", cue.splitlines()[1:-1])
+                hint = f"{hint}\n\n{cue}" if hint else cue
 
             messages = self.convo.messages(
                 hint, memory_block, self._tools_block, self._now_block(),

@@ -156,6 +156,21 @@ VCB uses **Whisper large-v3-turbo** (99 languages). Set `VCB_LANGUAGE` in
 `.env` (ISO code, e.g. `de`; a settings menu is coming) and VCB picks the
 recogniser; `VCB_STT_ENGINE=parakeet|faster-whisper|whisper-torch` forces one.
 
+Speech recognition only hears words. Three optional extras, ticked under
+**Hearing** in the settings window (all off by default), let the assistant
+react to *how* you said them:
+
+| Option | `.env` key | What it does | Cost |
+|---|---|---|---|
+| Sounds | `VCB_HEAR_SOUNDS` | Hears laughs, gasps, sighs, groans, moans, crying, screams, coughs… ([AST](https://huggingface.co/MIT/ast-finetuned-audioset-10-10-0.4593), AudioSet). A sound on its own gets a reply; one made while the assistant talks is mentioned to it on your next turn | ~0.3 GB download, ~0.4 GB GPU |
+| Emotion | `VCB_VOICE_EMOTION` | Recognises anger, joy, sadness, fear, surprise, disgust in your voice ([emotion2vec+](https://huggingface.co/emotion2vec/emotion2vec_plus_base)) | ~1.1 GB download, ~0.4 GB GPU; the FunASR pack installs on the next start |
+| Speaking style | `VCB_VOICE_TRAITS` | Notices when you're louder, quieter, faster, slower, higher/lower or flatter than *your* usual (learned from your first few sentences) | none |
+
+Findings reach the assistant as a one-turn note ("may be wrong") — never
+saved to history or memory — and it's told not to mention the detection, just
+respond naturally. They run on the same GPU as speech recognition. Use
+headphones with Sounds on, so the mic doesn't hear the assistant's own laughs.
+
 ## 💻 Requirements
 
 | | Minimum | Recommended |
@@ -250,6 +265,17 @@ exclude the VCB folder.
 If you start VCB from a VS Code terminal, VS Code may have copied the old
 `.env` values into that terminal. VCB prints a warning when this happens.
 Open a new terminal or just double-click `VCB.bat`.
+</details>
+
+<details>
+<summary><b>llama.cpp exits with a chat template parsing error</b></summary>
+
+Some GGUFs contain a Jinja chat template that llama.cpp cannot parse. Add the
+model to `user/models.json` with model-appropriate `extra_args`; for Mistral
+Nemo, use `["--no-jinja", "--chat-template", "mistral-v3-tekken"]`.
+Select that preset name or its GGUF file in settings: matching file paths reuse
+the preset's template flags, context size and GPU-layer settings. Unregistered
+files use the default settings and the GGUF's embedded template.
 </details>
 
 <details>

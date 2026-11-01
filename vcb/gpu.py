@@ -22,6 +22,14 @@ from pathlib import Path
 STT_VRAM_GB = 2.2                          # faster-whisper large-v3-turbo, float16
 TTS_VRAM_GB = {"chatterbox-turbo": 4.7, "kokoro": 0.7, "indextts": 6.4, "orpheus": 5.0}
 TTS_VRAM_DEFAULT_GB = 4.7                  # optional engines: assume a heavy one
+# Opt-in hearing models (see VocalConfig), incl. their share of a CUDA context.
+SOUNDS_VRAM_GB = 0.4                       # AST AudioSet classifier, float16
+EMOTION_VRAM_GB = 0.4                      # emotion2vec+ base
+
+
+def vocal_vram_gb(sounds: bool, emotion: bool) -> float:
+    """GPU memory of the enabled sound/emotion models (voice traits use none)."""
+    return (SOUNDS_VRAM_GB if sounds else 0.0) + (EMOTION_VRAM_GB if emotion else 0.0)
 
 DEFAULT_RESERVE_GB = 2.0                   # left free for the desktop, browser, games
 
@@ -170,17 +178,18 @@ def detect_amd_gpus() -> list[GPU]:
     return [GPU(n, vram.get(n, 0.0)) for n in names]
 
 
-def speech_vram_gb(tts_engine: str) -> float:
-    return STT_VRAM_GB + TTS_VRAM_GB.get(tts_engine, TTS_VRAM_DEFAULT_GB)
+def speech_vram_gb(tts_engine: str, hearing_gb: float = 0.0) -> float:
+    return STT_VRAM_GB + TTS_VRAM_GB.get(tts_engine, TTS_VRAM_DEFAULT_GB) + hearing_gb
 
 
-def llm_budget_gb(gpus: list[GPU], tts_engine: str, reserve_gb: float) -> float:
+def llm_budget_gb(gpus: list[GPU], tts_engine: str, reserve_gb: float,
+                  hearing_gb: float = 0.0) -> float:
     """GPU memory left for the LLM. Ollama can split a model over several
     GPUs, so their memory adds up (one fast GPU is still better)."""
     if not gpus:
         return 0.0
     total = sum(g.total_gb for g in gpus)
-    return round(max(0.0, total - speech_vram_gb(tts_engine) - reserve_gb), 1)
+    return round(max(0.0, total - speech_vram_gb(tts_engine, hearing_gb) - reserve_gb), 1)
 
 
 def recommend(budget_gb: float,

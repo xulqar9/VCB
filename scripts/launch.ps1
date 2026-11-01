@@ -192,19 +192,34 @@ function Get-TtsEngine {
     }
     return "chatterbox-turbo"
 }
+function Test-EnvFlag($name) {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if (-not $value) {
+        $envFile = Join-Path $Root ".env"
+        if (Test-Path $envFile) {
+            $m = Select-String -Path $envFile -Pattern "^\s*$name\s*=\s*`"?([A-Za-z0-9]+)" | Select-Object -Last 1
+            if ($m) { $value = $m.Matches[0].Groups[1].Value }
+        }
+    }
+    return $value -in @("1", "true", "yes", "on")
+}
 $Engine = Get-TtsEngine
-# engine -> (requirements file, download size shown to the user)
+# pack -> requirements file
 $PackFiles = [ordered]@{
     "chatterbox-turbo" = "requirements-chatterbox.txt"
     "xtts"             = "requirements-xtts.txt"
     "orpheus"          = "requirements-orpheus.txt"
     "csm"              = "requirements-csm.txt"
+    "emotion"          = "requirements-emotion.txt"
 }
-$PackNames = @{ "chatterbox-turbo" = "Chatterbox"; "xtts" = "XTTS"; "orpheus" = "Orpheus"; "csm" = "Sesame CSM" }
+$PackNames = @{ "chatterbox-turbo" = "the Chatterbox voice engine"; "xtts" = "the XTTS voice engine";
+                "orpheus" = "the Orpheus voice engine"; "csm" = "the Sesame CSM voice engine";
+                "emotion" = "voice emotion recognition" }
 $Packs = @()
 if ($Previous -match "packs=([^\r\n]*)") { $Packs += ($Matches[1].Split(",") | Where-Object { $_ }) }
 if ($Extras -or $Previous -match "extras=True") { $Packs += @($PackFiles.Keys) }
 if ($PackFiles.Contains($Engine)) { $Packs += $Engine }
+if (Test-EnvFlag "VCB_VOICE_EMOTION") { $Packs += "emotion" }
 # Without an NVIDIA GPU, main.py swaps IndexTTS/Orpheus for Chatterbox (AMD) or
 # the preset voice (CPU): make sure what it falls back to is installed.
 if ($Flavor -eq "rocm" -and $Engine -in @("indextts", "orpheus")) { $Packs += "chatterbox-turbo" }
@@ -250,8 +265,9 @@ if ($Previous -ne $want) {
         Fail "dependency install failed (see above). Re-run VCB.bat to retry; if it keeps failing, temporarily pause your antivirus or exclude this folder."
     }
     foreach ($pack in $Packs) {
-        Step "Installing the $($PackNames[$pack]) voice engine"
+        Step "Installing $($PackNames[$pack])"
         if (-not (Invoke-UvInstall -r (Join-Path $Root $PackFiles[$pack]))) {
+            if ($pack -eq "emotion") { Fail "Voice emotion install failed (see above). Re-run VCB.bat to retry, or untick it in the settings." }
             Fail "$($PackNames[$pack]) install failed (see above). Re-run VCB.bat to retry, or pick another voice in the settings."
         }
     }

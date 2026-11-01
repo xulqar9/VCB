@@ -21,7 +21,7 @@ from .config import ENV_FILE, USER_DIR, available_prompts, resolve_path
 from .envfile import read_env, update_env
 from .gpu import (
     DEFAULT_RESERVE_GB, OLLAMA_CHOICES, ModelChoice, detect_amd_gpus, detect_gpus,
-    estimate_vram_gb, llm_budget_gb, recommend, rocm_supported, speech_vram_gb,
+    estimate_vram_gb, llm_budget_gb, recommend, rocm_supported, speech_vram_gb, vocal_vram_gb,
 )
 
 DEFAULT_LABEL = "System default"
@@ -95,6 +95,33 @@ CLONING_ENGINES = {"chatterbox-turbo", "indextts", "xtts"}
 ORPHEUS_VOICES = ("tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe")
 INDEXTTS_STAMP = r".runtime\indextts\installed.txt"
 INDEXTTS_AUTO_GPU = "Auto"
+# SettingsWindow attribute -> checkbox label (saved as VCB_HEAR_SOUNDS, ...).
+HEARING_OPTIONS = (
+    ("hear_sounds", "Hear laughs, gasps, sighs and other sounds you make"),
+    ("voice_emotion", "Recognize the emotion in your voice"),
+    ("voice_traits", "Notice how you're speaking (louder, faster, higher... than usual)"),
+)
+
+
+def hearing_description(sounds: bool, emotion: bool, traits: bool,
+                        emotion_installed: bool) -> str:
+    """What the chosen hearing options cost, shown under the checkboxes."""
+    if not (sounds or emotion or traits):
+        return ("Off: the assistant only gets the words you say. These let it react to "
+                "how you said them too (it's told on each turn; nothing extra is saved).")
+    parts = []
+    if sounds:
+        parts.append("Sounds: one-time ~0.3 GB model download, ~0.4 GB of GPU memory. "
+                     "Best with headphones, so your mic doesn't hear the assistant.")
+    if emotion:
+        install = ("" if emotion_installed else
+                   " Not installed yet: the next VCB start installs it (a few minutes).")
+        parts.append("Emotion: one-time ~1.1 GB model download, ~0.4 GB of GPU memory."
+                     + install)
+    if traits:
+        parts.append("Speaking style: no download; it learns your usual voice during "
+                     "the first few things you say.")
+    return "\n".join(parts)
 
 
 def engine_installed(engine: str) -> bool:
@@ -328,12 +355,28 @@ class SettingsWindow:
         self._combo(frame, self.row, "Speaker", self.speaker, speakers, readonly=True)
         self.row += 1
 
+        truthy = lambda k, d: get(k, d).lower() in ("1", "true", "yes", "on")  # noqa: E731
+
+        # -- hearing ----------------------------------------------------------
+        self._heading("Hearing (beyond your words)")
+        self.hear_sounds = tk.BooleanVar(value=truthy("VCB_HEAR_SOUNDS", "false"))
+        self.voice_emotion = tk.BooleanVar(value=truthy("VCB_VOICE_EMOTION", "false"))
+        self.voice_traits = tk.BooleanVar(value=truthy("VCB_VOICE_TRAITS", "false"))
+        for var, text in HEARING_OPTIONS:
+            ttk.Checkbutton(frame, text=text, variable=getattr(self, var),
+                            command=self._refresh).grid(
+                row=self.row, column=0, columnspan=3, sticky="w")
+            self.row += 1
+        self.hearing_info = ttk.Label(frame, foreground="gray", wraplength=600,
+                                      justify="left")
+        self.hearing_info.grid(row=self.row, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        self.row += 1
+
         # -- options ----------------------------------------------------------
         self._heading("Options")
         opts = ttk.Frame(frame)
         opts.grid(row=self.row, column=0, columnspan=3, sticky="w")
         self.row += 1
-        truthy = lambda k, d: get(k, d).lower() in ("1", "true", "yes", "on")  # noqa: E731
         self.memory = tk.BooleanVar(value=truthy("VCB_MEMORY_ENABLED", "true"))
         self.ai_led = tk.BooleanVar(value=truthy("VCB_AI_LED", "false"))
         self.avatar = tk.BooleanVar(value=truthy("VCB_AVATAR_ENABLED", "false"))
@@ -414,6 +457,9 @@ class SettingsWindow:
             self.indextts_box.grid_remove()
         text, problem = self._engine_description(engine)
         self.engine_info.config(text=text, foreground="#b06000" if problem else "gray")
+        self.hearing_info.config(text=hearing_description(
+            self.hear_sounds.get(), self.voice_emotion.get(), self.voice_traits.get(),
+            importlib.util.find_spec("funasr") is not None))
         if backend == "ollama":
             self._update_models()
             if _ollama_running(self.ollama_base):
@@ -460,7 +506,10 @@ class SettingsWindow:
             reserve = float(self.reserve.get())
         except ValueError:
             reserve = DEFAULT_RESERVE_GB
-        return llm_budget_gb(gpus, self.engine.get(), reserve)
+        return llm_budget_gb(gpus, self.engine.get(), reserve, self._hearing_gb())
+
+    def _hearing_gb(self) -> float:
+        return vocal_vram_gb(self.hear_sounds.get(), self.voice_emotion.get())
 
     def _update_models(self) -> None:
         """Re-label the model list (fits / too big) for the current voice
@@ -482,7 +531,7 @@ class SettingsWindow:
         self.ollama_model.set(by_tag.get(current, current))
         self.recommended = best
 
-        speech = speech_vram_gb(self.engine.get())
+        speech = speech_vram_gb(self.engine.get(), self._hearing_gb())
         if budget is None:
             if self.rocm_gpus:
                 text = (f"{self.rocm_gpus[0].name} found, but its memory couldn't be read. "
@@ -612,6 +661,9 @@ class SettingsWindow:
             "VCB_MEMORY_ENABLED": bool_str(self.memory),
             "VCB_AI_LED": bool_str(self.ai_led),
             "VCB_AVATAR_ENABLED": bool_str(self.avatar),
+            "VCB_HEAR_SOUNDS": bool_str(self.hear_sounds),
+            "VCB_VOICE_EMOTION": bool_str(self.voice_emotion),
+            "VCB_VOICE_TRAITS": bool_str(self.voice_traits),
         }
         if backend == "llama_cpp":
             updates["VCB_ACTIVE_MODEL"] = self.gguf.get().strip()

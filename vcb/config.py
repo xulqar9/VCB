@@ -198,6 +198,54 @@ class STTConfig:
     context_chars: int = 200
 
 
+# AudioSet labels the sound detector listens for -> how the assistant is told
+# about them ("they laugh"). Everything else it hears (speech, music, noise)
+# is ignored. "Breathing" is left out: it fires on ordinary breaths.
+VOCAL_SOUNDS: dict[str, str] = {
+    "Laughter": "laughs", "Belly laugh": "laughs hard", "Giggle": "giggles",
+    "Chuckle, chortle": "chuckles", "Snicker": "snickers", "Gasp": "gasps",
+    "Sigh": "sighs", "Groan": "groans", "Wail, moan": "moans", "Grunt": "grunts",
+    "Whimper": "whimpers", "Crying, sobbing": "cries", "Screaming": "screams",
+    "Pant": "pants", "Humming": "hums", "Whistling": "whistles", "Cough": "coughs",
+    "Sneeze": "sneezes", "Sniff": "sniffs", "Throat clearing": "clears their throat",
+    "Hiccup": "hiccups", "Snort": "snorts",
+}
+
+
+@dataclass
+class VocalConfig:
+    """Hearing more than words: non-speech sounds (laughs, gasps, sighs, ...),
+    the emotion in the user's voice, and how they speak compared with usual
+    (pitch, loudness, pace). Each is a separate opt-in model/measurement; the
+    results reach the LLM as a short note on the current turn only."""
+    sounds: bool = field(default_factory=lambda: _env_bool("VCB_HEAR_SOUNDS", False))
+    emotion: bool = field(default_factory=lambda: _env_bool("VCB_VOICE_EMOTION", False))
+    traits: bool = field(default_factory=lambda: _env_bool("VCB_VOICE_TRAITS", False))
+    device: str = "cuda"                 # set next to speech recognition (vcb.hardware)
+    # Sound events: an AudioSet classifier on the raw mic (Silero VAD drops
+    # most wordless sounds before speech recognition ever hears them).
+    sound_model: str = "MIT/ast-finetuned-audioset-10-10-0.4593"
+    sound_window_s: float = 1.0          # audio per classification
+    sound_hop_s: float = 0.5             # a new window this often
+    sound_min_dbfs: float = -48.0        # quieter windows aren't classified at all
+    sound_threshold: float = 0.3         # per-label probability to count it
+    # A sound with no words while the assistant is quiet: True = it's the
+    # user's turn and the assistant reacts; False = it's only mentioned
+    # alongside their next words.
+    react_to_lone_sounds: bool = True
+    # A sound while the assistant is talking: "context" = she keeps talking
+    # and hears about it on the next turn; "ignore" = dropped (use this with
+    # speakers instead of headphones, so her own laughs aren't heard as yours).
+    sounds_during_reply: str = "context"
+    # Emotion: emotion2vec+ (installed with the voice emotion pack).
+    emotion_model: str = "emotion2vec/emotion2vec_plus_base"
+    emotion_min_score: float = 0.6       # weaker guesses are left out
+    emotion_min_s: float = 0.8           # shorter utterances aren't judged
+    # Voice traits are compared with this user's own usual voice, learned
+    # over the session; nothing is said until this many utterances are in.
+    traits_baseline_utterances: int = 3
+
+
 @dataclass
 class LLMConfig:
     # Any OpenAI-compatible server: llama.cpp server, LM Studio, Ollama, vLLM.
@@ -326,7 +374,7 @@ class ProsodyConfig:
 #   {"my-model": {"label": "my-model", "model_path": "models\\my.gguf",
 #                 "ctx_size": 16384, "extra_args": ["--no-jinja"]}}
 # then set VCB_ACTIVE_MODEL=my-model. VCB_ACTIVE_MODEL may also be a direct
-# path to any .gguf file.
+# path to any .gguf file; a path matching a preset keeps that preset's settings.
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ModelPreset:
@@ -370,6 +418,10 @@ def resolve_model_preset(name: str) -> ModelPreset:
     if name in MODEL_PRESETS:
         return MODEL_PRESETS[name]
     if name.lower().endswith(".gguf"):
+        model_path = Path(resolve_path(name)).resolve()
+        for preset in MODEL_PRESETS.values():
+            if Path(resolve_path(preset.model_path)).resolve() == model_path:
+                return preset
         return ModelPreset(label=Path(name).stem, model_path=name)
     raise ValueError(
         f"VCB_ACTIVE_MODEL {name!r} is neither a preset ({', '.join(MODEL_PRESETS)}) "
@@ -653,6 +705,7 @@ class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     vad: VADConfig = field(default_factory=VADConfig)
     stt: STTConfig = field(default_factory=STTConfig)
+    vocal: VocalConfig = field(default_factory=VocalConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     chunker: ChunkerConfig = field(default_factory=ChunkerConfig)
@@ -712,4 +765,3 @@ class AppConfig:
             raise ValueError(
                 f"unknown backend {self.backend!r} (use llama_cpp, ollama, or cloud)"
             )
-
