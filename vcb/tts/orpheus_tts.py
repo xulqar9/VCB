@@ -165,6 +165,8 @@ class OrpheusTTS(TTSEngine):
         self._weights = ""
 
     async def load(self) -> None:
+        log.info("Loading the Orpheus voice model on %s...", self.cfg.device)
+
         def _load():
             _register_cuda_dlls()
             import llama_cpp
@@ -225,6 +227,7 @@ class OrpheusTTS(TTSEngine):
             # First generation pays llama.cpp's and the SNAC session's one-time
             # setup (seconds): do it now, not on the greeting the user would
             # otherwise sit through in silence -- or talk over.
+            log.info("Warming up the Orpheus voice (generating a sample without playing it)...")
             for _ in model.stream_tts_sync("Hello there, nice to meet you.",
                                            options={"voice_id": self.cfg.orpheus_voice,
                                                     "max_tokens": 600}):

@@ -356,17 +356,6 @@ if (Test-EnvFlag "VCB_ONLINE_SEARCH") {
 }
 
 # -- run ----------------------------------------------------------------------
-# Keep CUDA JIT kernels in VCB's own cache so other CUDA apps can't evict them.
-# 4 GiB is NVIDIA's maximum cache size; VCB uses kernels for both speech GPUs.
-$CudaCache = Join-Path $Runtime "cuda-cache"
-try {
-    New-Item -ItemType Directory -Path $CudaCache -Force -ErrorAction Stop | Out-Null
-} catch {
-    Fail "could not create VCB's CUDA kernel cache ($($_.Exception.Message))"
-}
-$env:CUDA_CACHE_PATH = $CudaCache
-$env:CUDA_CACHE_MAXSIZE = "4294967296"
-
 Step "Starting VCB (the first start also downloads the speech models, a few GB)"
 & $Py (Join-Path $Root "main.py") @Pass
 exit $LASTEXITCODE

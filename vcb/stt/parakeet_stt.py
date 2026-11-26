@@ -70,8 +70,7 @@ class ParakeetSTT(STTEngine):
             # First call pays session/kernel setup. Use a voiced signal rather
             # than silence so the transducer's decoder runs too (on silence it
             # emits a blank and stops, leaving the decoder cold).
-            log.info("Preparing speech recognition on %s; the first start after setup or "
-                     "a driver update may take up to a minute.", where)
+            log.info("Preparing speech recognition on %s (running a short audio sample)...", where)
             model.recognize(_warmup_signal(), sample_rate=16_000)
             return model
 
