@@ -12,6 +12,7 @@ diag.txt
 
 models
 logs
+benchmark_results/
 .vscode
 # voice samples dropped in the repo root
 /*.wav
