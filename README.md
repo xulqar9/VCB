@@ -156,6 +156,9 @@ never invents words out of silence or background noise. For other languages
 VCB uses **Whisper large-v3-turbo** (99 languages). Set `VCB_LANGUAGE` in
 `.env` (ISO code, e.g. `de`; a settings menu is coming) and VCB picks the
 recogniser; `VCB_STT_ENGINE=parakeet|faster-whisper|whisper-torch` forces one.
+The first start after setup or a driver update may take up to a minute while
+Parakeet prepares its GPU kernels; VCB keeps these in `.runtime\cuda-cache` so
+other CUDA applications do not evict them.
 
 Speech recognition only hears words. Three optional extras, ticked under
 **Hearing** in the settings window (all off by default), let the assistant

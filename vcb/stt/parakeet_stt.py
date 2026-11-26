@@ -61,6 +61,8 @@ class ParakeetSTT(STTEngine):
                 log.info("onnxruntime has no CUDA provider here; parakeet runs on the CPU "
                          "(fast enough: ~0.2 s per utterance)")
         self._provider = providers[0][0] if isinstance(providers[0], tuple) else providers[0]
+        where = (f"cuda:{self.cfg.device_index}" if self._provider == "CUDAExecutionProvider"
+                 else "cpu")
 
         def _load():
             model = onnx_asr.load_model(MODEL, providers=providers,
@@ -68,12 +70,12 @@ class ParakeetSTT(STTEngine):
             # First call pays session/kernel setup. Use a voiced signal rather
             # than silence so the transducer's decoder runs too (on silence it
             # emits a blank and stops, leaving the decoder cold).
+            log.info("Preparing speech recognition on %s; the first start after setup or "
+                     "a driver update may take up to a minute.", where)
             model.recognize(_warmup_signal(), sample_rate=16_000)
             return model
 
         self._model = await asyncio.to_thread(_load)
-        where = (f"cuda:{self.cfg.device_index}" if self._provider == "CUDAExecutionProvider"
-                 else "cpu")
         log.info("parakeet-tdt-0.6b-v3 loaded on %s", where)
 
     async def transcribe(self, audio: np.ndarray, sample_rate: int,
