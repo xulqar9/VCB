@@ -1,6 +1,6 @@
 """Built-in offline skills: date/time, calculator, timers, remember/recall,
-notes. All run locally — no network. Online skills (web/weather) come later,
-gated on the privacy-proxy decision."""
+notes. All run locally — no network. The optional web_search skill lives in
+vcb.search and is added only when online search is turned on."""
 
 from __future__ import annotations
 

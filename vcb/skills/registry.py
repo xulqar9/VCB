@@ -25,6 +25,28 @@ class SkillRegistry:
     def names(self) -> list[str]:
         return list(self._skills)
 
+    def get(self, name: str) -> Skill | None:
+        return self._skills.get(name)
+
+    def add(self, skill: Skill) -> None:
+        self._skills[skill.name] = skill
+
+    def is_sensitive(self, name: str) -> bool:
+        s = self._skills.get(name)
+        return bool(s and s.sensitive)
+
+    def is_untrusted(self, name: str) -> bool:
+        s = self._skills.get(name)
+        return bool(s and s.untrusted)
+
+    def filler_for(self, name: str, language: str) -> str:
+        s = self._skills.get(name)
+        return s.filler(language) if s else ""
+
+    def _guidance(self) -> str:
+        extra = [s.guidance for s in self._skills.values() if s.guidance]
+        return ("\n" + "\n".join(extra)) if extra else ""
+
     def prompt_block(self) -> str:
         """Instruction + tool catalogue appended to the system prompt (for
         models used with VCB's JSON tool protocol)."""
@@ -50,7 +72,7 @@ class SkillRegistry:
                 f"{k} ({v})" for k, v in skill.parameters.items()
             ) or "no arguments"
             lines.append(f"- {skill.name}: {skill.description} Args: {args}.")
-        return "\n".join(lines)
+        return "\n".join(lines) + self._guidance()
 
     def native_prompt_block(self) -> str:
         """Short guidance when tools are passed natively (function calling):
@@ -60,7 +82,8 @@ class SkillRegistry:
         return ("TOOLS: You have tools for math, timers, reminders, and saving or "
                 "recalling facts and notes. You already know the current date and "
                 "time. " + _HONESTY + " After a tool result, reply in one or two "
-                "natural spoken sentences and never mention the tool by name.")
+                "natural spoken sentences and never mention the tool by name."
+                + self._guidance())
 
     def openai_tools(self) -> list[dict]:
         """The skills as OpenAI function-calling specs."""
@@ -84,5 +107,8 @@ class SkillRegistry:
         try:
             return await skill.run(args, ctx)
         except Exception as exc:                     # skills must never crash a turn
+            if skill.sensitive:                      # the traceback/message may hold private args
+                log.error("skill %s failed (%s)", name, type(exc).__name__)
+                return f"Error running {name}."
             log.exception("skill %s failed", name)
             return f"Error running {name}: {exc}"

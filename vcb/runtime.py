@@ -6,6 +6,7 @@ console window shows it live, so the chat stays visually separate from the
 system/STT logs in the main terminal.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -255,8 +256,21 @@ class ManagedProcesses:
         self.cfg = cfg
         self._server: subprocess.Popen | None = None
         self._window: subprocess.Popen | None = None
+        self._tor = None                     # vcb.search.tor.ManagedTor, if we started one
         # Kept open for the program's lifetime so children die if we're hard-killed.
         self._job = _create_kill_on_close_job()
+
+    def start_search(self) -> None:
+        """Start VCB's own Tor for online search, if search is on and set to
+        the managed Tor route. Doesn't wait: Tor connects in the background and
+        searches stay off until the route is verified."""
+        scfg = self.cfg.search
+        if not (scfg.enabled and scfg.route == "tor" and scfg.tor_mode == "managed"):
+            return
+        if scfg.problem():
+            return                           # the orchestrator explains what's wrong
+        from .search.tor import start_managed_tor
+        self._tor = start_managed_tor(scfg, lambda p: _assign_to_job(self._job, p))
 
     def start_server(self) -> None:
         backend = self.cfg.backend
@@ -376,6 +390,11 @@ class ManagedProcesses:
         log.info("transcript window opened (tailing %s)", transcript_path)
 
     def shutdown(self) -> None:
+        if self._tor is not None:
+            log.info("stopping Tor")
+            with contextlib.suppress(Exception):
+                self._tor.stop()
+            self._tor = None
         for name, proc in (("transcript window", self._window), ("llm backend", self._server)):
             if proc is None or proc.poll() is not None:
                 continue

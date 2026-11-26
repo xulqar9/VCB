@@ -1,0 +1,7 @@
+# Online search (optional, off by default). Installed only when it's turned on:
+# by VCB settings > Online search > Set up & test, or by the launcher when
+# VCB_ONLINE_SEARCH=true. requests/psutil are pinned by requirements-lock.txt;
+# PySocks is pinned here so adding it doesn't change the shared lock.
+requests[socks]
+PySocks==1.7.1
+psutil

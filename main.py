@@ -173,6 +173,7 @@ def main() -> None:
     cfg.llm.system_prompt += getattr(_TTS_ENGINES[tts_engine], "prompt_instructions", "")
     procs = ManagedProcesses(cfg)
     try:
+        procs.start_search()                 # Tor (if used) connects while the LLM loads
         procs.start_server()                 # blocks until the backend is ready
         # The LLM is loaded now, so free GPU memory is what's really left for
         # speech recognition and the voice.

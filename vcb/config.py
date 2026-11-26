@@ -649,6 +649,184 @@ class SkillsConfig:
     )
 
 
+SEARCH_ROUTES = ("tor", "vpn")
+SEARCH_BACKENDS = ("brave", "searxng")
+BRAVE_DEFAULT_URL = "https://api.search.brave.com/res/v1/web/search"
+# Each search service has its own key variable, so one service's key is never
+# sent to another.
+SEARCH_KEY_ENVS = {"brave": "VCB_BRAVE_API_KEY", "searxng": "VCB_SEARXNG_API_KEY"}
+TOR_DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
+
+
+@dataclass
+class SearchConfig:
+    """Optional online search (off by default). Nothing search-related is
+    imported, installed or started unless `enabled`. All traffic goes through
+    the chosen private route and fails closed: no route, no search -- never a
+    direct connection. Queries, results and IPs are never logged."""
+    enabled: bool = field(default_factory=lambda: _env_bool("VCB_ONLINE_SEARCH", False))
+    # "tor" = the Tor network (VCB-managed tor.exe, or your own Tor);
+    # "vpn" = your already-connected VPN, pinned to its network adapter.
+    route: str = field(default_factory=lambda: _env_str("VCB_SEARCH_ROUTE", "tor").strip().lower())
+    tor_mode: str = field(default_factory=lambda: _env_str("VCB_SEARCH_TOR_MODE", "managed").strip().lower())
+    tor_proxy: str = field(default_factory=lambda: _env_str("VCB_SEARCH_TOR_PROXY", TOR_DEFAULT_PROXY).strip())
+    # VPN: "adapter" = bind sockets to the VPN adapter and resolve DNS through
+    # the VPN; "proxy" = the VPN provider's own SOCKS5 proxy.
+    vpn_mode: str = field(default_factory=lambda: _env_str("VCB_SEARCH_VPN_MODE", "adapter").strip().lower())
+    vpn_adapter: str = field(default_factory=lambda: _env_str("VCB_SEARCH_VPN_ADAPTER", "").strip())
+    vpn_proxy: str = field(default_factory=lambda: _env_str("VCB_SEARCH_VPN_PROXY", "").strip())
+    backend: str = field(default_factory=lambda: _env_str("VCB_SEARCH_BACKEND", "brave").strip().lower())
+    url: str = field(default_factory=lambda: _env_str("VCB_SEARCH_URL", "").strip())
+    # Extra query parameters as a JSON object, e.g. {"language": "en"}.
+    params: str = field(default_factory=lambda: _env_str("VCB_SEARCH_PARAMS", "").strip())
+    # SearXNG private-engine tokens use a cookie; Bearer is for an auth gateway.
+    searxng_auth_mode: str = field(
+        default_factory=lambda: _env_str("VCB_SEARXNG_AUTH_MODE", "cookie").strip().lower())
+    # Optional NAME of the env var holding the API key (the key itself never
+    # goes in config). Empty = the backend's own variable (SEARCH_KEY_ENVS).
+    api_key_env: str = field(default_factory=lambda: _env_str("VCB_SEARCH_API_KEY_ENV", "").strip())
+    timeout_s: float = field(default_factory=lambda: _env_float("VCB_SEARCH_TIMEOUT_S", 0.0))
+    max_results: int = 5
+    max_chars: int = 1500               # total result text handed to the LLM
+    max_per_turn: int = 2
+    reverify_s: float = 600.0           # re-check the route this often while healthy
+
+    @property
+    def backend_url(self) -> str:
+        if self.url:
+            return self.url
+        return BRAVE_DEFAULT_URL if self.backend == "brave" else ""
+
+    @property
+    def key_env(self) -> str:
+        """The env var this backend's API key is read from."""
+        return self.api_key_env or SEARCH_KEY_ENVS.get(self.backend, "")
+
+    @property
+    def api_key(self) -> str:
+        return os.environ.get(self.key_env, "").strip() if self.key_env else ""
+
+    @property
+    def proxy(self) -> str:
+        """SOCKS proxy for the route ("" for VPN adapter mode)."""
+        if self.route == "tor":
+            return self.tor_proxy
+        return self.vpn_proxy if self.vpn_mode == "proxy" else ""
+
+    @property
+    def effective_timeout_s(self) -> float:
+        if self.timeout_s > 0:
+            return self.timeout_s
+        return 6.0 if self.route == "tor" else 4.0
+
+    def extra_params(self) -> dict[str, str]:
+        if not self.params:
+            return {}
+        data = json.loads(self.params)
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+        return {str(k): str(v) for k, v in data.items()}
+
+    def problem(self) -> str | None:
+        """Why this configuration can't be used safely, or None if it's fine.
+        Pure validation: no imports beyond the stdlib, no network."""
+        from urllib.parse import urlsplit
+
+        if self.route not in SEARCH_ROUTES:
+            return f"Unknown search route {self.route!r} (use tor or vpn)."
+        if self.route == "tor":
+            if self.tor_mode not in ("managed", "external"):
+                return f"Unknown Tor mode {self.tor_mode!r} (use managed or external)."
+            err = _check_socks(self.tor_proxy, loopback_only=True)
+            if err:
+                return f"Tor proxy: {err}"
+        else:
+            if self.vpn_mode not in ("adapter", "proxy"):
+                return f"Unknown VPN mode {self.vpn_mode!r} (use adapter or proxy)."
+            if self.vpn_mode == "adapter" and not self.vpn_adapter:
+                return "Pick the VPN's network adapter."
+            if self.vpn_mode == "proxy":
+                err = _check_socks(self.vpn_proxy, loopback_only=False)
+                if err:
+                    return f"VPN proxy: {err}"
+        if self.backend not in SEARCH_BACKENDS:
+            return f"Unknown search backend {self.backend!r} (use brave or searxng)."
+        if self.backend == "searxng" and self.searxng_auth_mode not in ("cookie", "bearer"):
+            return "SearXNG token type must be cookie or bearer."
+        url = self.backend_url
+        if not url:
+            return "Enter your SearXNG instance URL."
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if not host:
+            return "The search URL has no host."
+        onion = host.endswith(".onion")
+        if parts.scheme != "https" and not (parts.scheme == "http" and onion):
+            return "The search URL must use https:// (plain http is only allowed for .onion)."
+        if onion and self.route != "tor":
+            return ".onion search URLs need the Tor route."
+        if _is_local_host(host):
+            return "The search URL must be a public server (not this PC or your local network)."
+        if parts.username or parts.password:
+            return "Don't put credentials in the search URL; use the API key setting."
+        if self.backend == "brave" and not self.api_key:
+            return f"Brave Search needs an API key in {self.key_env or 'an environment variable'}."
+        try:
+            params = self.extra_params()
+        except ValueError as exc:
+            return f"Search parameters must be a JSON object ({exc})."
+        if self.backend == "searxng":
+            token = self.api_key or params.get("tokens", "")
+            if any(ord(char) < 0x20 or ord(char) == 0x7F for char in token):
+                return "SearXNG tokens can't contain control characters."
+        return None
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _is_local_host(host: str) -> bool:
+    import ipaddress
+
+    if host in ("localhost", "localhost.localdomain") or host.endswith((".local", ".lan", ".home", ".internal")):
+        return True
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return "." not in host        # bare intranet names
+    return not ip.is_global
+
+
+def _check_socks(url: str, *, loopback_only: bool) -> str | None:
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    if not url:
+        return "not set."
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return "not a valid URL."
+    if parts.scheme != "socks5h":
+        return "must start with socks5h:// so DNS is resolved through the proxy."
+    if not parts.hostname or not port:
+        return "needs a host and port, e.g. socks5h://127.0.0.1:9050."
+    if loopback_only:
+        host = parts.hostname
+        try:
+            ok = host == "localhost" or ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            ok = False
+        if not ok:
+            return "must be on this PC (127.0.0.1)."
+    return None
+
+
 @dataclass
 class AvatarConfig:
     """Stream TTS audio + conversation state/emotion to an external 3D avatar app
@@ -719,6 +897,7 @@ class AppConfig:
     resume: ResumeConfig = field(default_factory=ResumeConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
+    search: SearchConfig = field(default_factory=SearchConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     avatar: AvatarConfig = field(default_factory=AvatarConfig)
     supervision: SupervisionConfig = field(default_factory=SupervisionConfig)

@@ -44,6 +44,17 @@ class Skill(ABC):
     parameters: dict[str, str] = {}
     # JSON-schema type per arg for native function calling (default "string").
     param_types: dict[str, str] = {}
+    # Arguments/results are private (e.g. web search queries): never log them.
+    sensitive: bool = False
+    # Results are untrusted outside content (e.g. web pages): once a turn has
+    # them, the model may not call other tools, and they're quoted as data.
+    untrusted: bool = False
+    # Extra rule for the system prompt when this skill is enabled.
+    guidance: str = ""
+
+    def filler(self, language: str) -> str:
+        """Short line spoken while the skill runs, if it may take a moment."""
+        return ""
 
     @abstractmethod
     async def run(self, args: dict, ctx: SkillContext) -> str:

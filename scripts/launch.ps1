@@ -344,6 +344,17 @@ function Ensure-IndexTTS {
 
 if ($Engine -eq "indextts") { Ensure-IndexTTS }
 
+# -- online search (optional) ---------------------------------------------------
+# Only when switched on in the settings: install whatever it still needs
+# (e.g. after a VCB update or a manual .env edit). If that fails, VCB still
+# starts; searches just stay off and the assistant says so.
+if (Test-EnvFlag "VCB_ONLINE_SEARCH") {
+    & $Py -m vcb.search.install --ensure | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Online search couldn't be set up; VCB will run without it. Open VCB Settings > Online search > Set up & test." -ForegroundColor Yellow
+    }
+}
+
 # -- run ----------------------------------------------------------------------
 Step "Starting VCB (the first start also downloads the speech models, a few GB)"
 & $Py (Join-Path $Root "main.py") @Pass

@@ -385,6 +385,11 @@ class SettingsWindow:
                           (self.avatar, "Unreal avatar")):
             ttk.Checkbutton(opts, text=text, variable=var).pack(side="left", padx=(0, 12))
 
+        # -- online search ----------------------------------------------------
+        self._heading("Online search (optional)")
+        from .search.settings_ui import SearchSection
+        self.search = SearchSection(self, env)
+
         buttons = ttk.Frame(frame)
         buttons.grid(row=self.row, column=0, columnspan=3, sticky="e", pady=(14, 0))
         ttk.Button(buttons, text="Cancel", command=root.destroy).pack(side="right")
@@ -457,6 +462,8 @@ class SettingsWindow:
             self.indextts_box.grid_remove()
         text, problem = self._engine_description(engine)
         self.engine_info.config(text=text, foreground="#b06000" if problem else "gray")
+        if hasattr(self, "search"):
+            self.search.refresh()            # cloud brain + search: privacy note
         self.hearing_info.config(text=hearing_description(
             self.hear_sounds.get(), self.voice_emotion.get(), self.voice_traits.get(),
             importlib.util.find_spec("funasr") is not None))
@@ -667,6 +674,7 @@ class SettingsWindow:
         }
         if backend == "llama_cpp":
             updates["VCB_ACTIVE_MODEL"] = self.gguf.get().strip()
+        updates.update(self.search.updates())
         update_env(self.env_path, updates)
         self.saved = True
         self.root.destroy()

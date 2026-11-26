@@ -40,6 +40,7 @@ say *"go on"*. One double-click to install, no Python setup required.
 | 🧠 **Any brain** | Local & free with **Ollama**, free-tier **Google Gemini**, **OpenAI**, OpenRouter, Groq, or your own GGUF via llama.cpp. |
 | 💾 **Long-term memory** | Remembers facts about you and past conversations across sessions — stored in a local file on your PC. |
 | 🛠️ **Tools** | Timers, reminders, calculator, notes — called by the model mid-conversation. Reminders take real times (*"Monday at 8"*) and survive restarts. |
+| 🔎 **Private web search** *(optional, off by default)* | Looks up current information when it needs to — only through **Tor** or **your VPN**, never directly, and nothing you ask is logged. |
 | 🕒 **Knows the date & time** | Always knows the current date, time and your time zone, how long ago things were said, and turns *"next Monday"* into a real date in its memory. |
 | 💬 **Live transcript** | A chat window that writes each word as it's heard, so you can read along. |
 | 🎭 **Personas** | 10 built-in personalities (coach, mentor, storyteller, devil's advocate, …) — or write your own in a text file. |
@@ -171,6 +172,60 @@ saved to history or memory — and it's told not to mention the detection, just
 respond naturally. They run on the same GPU as speech recognition. Use
 headphones with Sounds on, so the mic doesn't hear the assistant's own laughs.
 
+## 🔎 Online search (optional)
+
+Off by default — and while it's off, VCB doesn't install, import or start
+anything for it. Tick **Enable online search** in the settings window and
+**Set up & test** opens:
+
+1. **Pick a private route.** **Tor** (the search service never sees your IP;
+   VCB downloads and runs its own Tor, ~15 MB, or uses yours) or **your VPN**
+   (faster; searches are pinned to the VPN's network adapter, or go through
+   your VPN provider's SOCKS5 proxy).
+2. **Pick a search service.** [Brave Search API](https://brave.com/search/api/)
+   (needs a key; the window walks you through getting one) or any
+   [SearXNG](https://docs.searxng.org/) instance with the JSON format enabled.
+   Each service keeps its own credential (`VCB_BRAVE_API_KEY`,
+   `VCB_SEARXNG_API_KEY`), so one service's credential is never sent to the
+   other. SearXNG has no sign-up or central API key: ask the server owner for
+   a private-engine token.
+   VCB sends it as a cookie and checks that it unlocks an engine. Most public
+   servers do not offer private engines or allow app searches; leave the token
+   blank if the server doesn't require one. If you run the server, its admin
+   must add the token to that engine's `tokens` setting in `settings.yml`
+   before sharing it with you.
+3. **Set up & check** installs only what's needed (`requests`, PySocks, and
+   Tor if chosen — a failed or cancelled install is rolled back), then checks
+   the route: the address websites see (shown masked, with its country), a
+   **DNS leak test**, and a test search. Search switches on only when all of
+   that passes.
+
+With the VPN route, the window shows live whether your VPN is connected (start
+the VPN app while it's open and it notices). Rarely needed options (your own
+Tor, a VPN provider's SOCKS5 proxy, extra parameters, **Remove components**)
+are under **Show advanced options**. There you can choose Bearer token only if
+an authentication gateway in front of SearXNG specifically requires it.
+
+While you talk, the model decides when a question needs the web; VCB says a
+short *"let me look that up"* and answers with what it found (it gives up after
+a few seconds and answers from memory instead).
+
+| Guarantee | How |
+|---|---|
+| **Fails closed** | Searches only run after the route is verified (Tor: the Tor Project's own check; VPN: the VPN adapter is up and traffic leaves through it). If it drops, searching stops and the assistant says it couldn't check online — there's never a direct fallback. |
+| **No DNS leaks** | Tor/proxy: `socks5h://`, so the proxy resolves names. VPN adapter: your VPN's own DNS server, asked inside the tunnel (DNS over HTTPS through the VPN as a fallback). The self-test watches for any lookup through your normal resolver. |
+| **Nothing logged** | Questions, results and IP addresses never reach the logs; only *"web search: ok via tor in 2.1s (5 results)"*. Turns that used the web aren't saved to long-term memory. |
+| **Results are untrusted** | Text from the web is cleaned, cut short, fenced off and the model is told never to follow instructions inside it; after a search, no other tool (timers, notes, …) can be used in that reply. |
+
+> [!NOTE]
+> With a **Cloud API** brain, your cloud provider sees your questions and the
+> search results (like the rest of the conversation). With `VCB_LOG_LEVEL=DEBUG`,
+> VCB's log includes what you say (not search results). The VCB update check
+> and model downloads are not routed through Tor/VPN. Unticking the box turns
+> search off and stops Tor; **Remove components** (setup dialog, advanced options) deletes
+> Tor and the packages that setup added. Settings: `VCB_ONLINE_SEARCH` and
+> `VCB_SEARCH_*` in [`.env.example`](.env.example).
+
 ## 💻 Requirements
 
 | | Minimum | Recommended |
@@ -178,7 +233,7 @@ headphones with Sounds on, so the mic doesn't hear the assistant's own laughs.
 | **OS** | Windows 10 / 11 | Windows 11 |
 | **GPU** | none (CPU mode: slower, preset voice) | NVIDIA, **8 GB VRAM** with a cloud brain, **16 GB** fully local. AMD: RX 9070 / 9070 XT / 9060 XT, AI PRO R9700, RX 7900 XTX, PRO W7900, RX 7700 on Windows 11 (see FAQ) |
 | **Disk** | ~10 GB | ~15 GB (+ your Ollama models) |
-| **Internet** | for the first-time download | — fully offline afterwards with Ollama |
+| **Internet** | for the first-time download | — fully offline afterwards with Ollama (unless you turn on online search) |
 
 ## ⚙️ How it works
 
@@ -374,6 +429,7 @@ vcb/
   runtime.py                 Ollama / llama-server lifecycle
   audio/ stt/ llm/ tts/      engines behind small abstract interfaces
   memory/ skills/ avatar/    long-term memory, tool calling, Unreal bridge
+  search/                    optional online search (private route, Tor, setup, self-test)
 prompts/                     example personas
 tests/                       pytest suite
 unreal/VcbAvatar/            optional Unreal Engine plugin
@@ -384,7 +440,8 @@ Whisper, memory), `requirements-chatterbox.txt` / `-xtts.txt` /
 `-orpheus.txt` / `-csm.txt` (voice engine packs the launcher installs on
 demand), [`requirements-lock.txt`](requirements-lock.txt) (tested versions),
 [`requirements-overrides.txt`](requirements-overrides.txt) (resolves
-over-strict pins in chatterbox-tts / orpheus-cpp).
+over-strict pins in chatterbox-tts / orpheus-cpp), `requirements-search.txt`
+(online search, installed only when it's turned on).
 </details>
 
 ## 🗺️ Roadmap
@@ -393,7 +450,8 @@ over-strict pins in chatterbox-tts / orpheus-cpp).
 - [x] Voice cloning, long-term memory, tools, personas
 - [x] One-click Windows launcher and settings window
 - [x] Live word-by-word transcript
-- [ ] Web search & weather skills
+- [x] Private web search (Tor / VPN, optional)
+- [ ] Weather skill
 - [ ] Linux / macOS support
 - [ ] Webcam-based gaze for the 3D avatar
 
