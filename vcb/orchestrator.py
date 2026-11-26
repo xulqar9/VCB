@@ -322,6 +322,8 @@ class Orchestrator:
             loops.append(("idle-loop", self._idle_loop, None))
         if self._memory is not None:
             loops.append(("reminder-loop", self._reminder_loop, None))
+        if self._memory is not None and self.cfg.memory.dreaming_enabled:
+            loops.append(("memory-maintenance", self._memory_maintenance_loop, None))
         if self.vocal.sounds is not None:
             self.vocal.sounds.on_event = self._on_sound
             loops.append(("sound-loop", self.vocal.sounds.run, None))
@@ -366,8 +368,9 @@ class Orchestrator:
             if self._consolidate_task and not self._consolidate_task.done():
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(self._consolidate_task, timeout=20)
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(self._run_consolidation(), timeout=30)
+            if not self.cfg.memory.dreaming_enabled:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self._run_consolidation(), timeout=30)
         await asyncio.gather(
             self.stt.close(), self.llm.close(), self.tts.close(),
             return_exceptions=True,
@@ -1431,31 +1434,61 @@ class Orchestrator:
         if (self._memory is None or n <= 0 or self._consolidating
                 or (self._consolidate_task and not self._consolidate_task.done())):
             return
+        if self.cfg.memory.dreaming_enabled:
+            return
         if self._memory.count_unconsolidated() >= n:
             self._consolidate_task = asyncio.create_task(
                 self._run_consolidation(), name="consolidate"
             )
 
-    async def _run_consolidation(self) -> None:
+    async def _memory_maintenance_loop(self) -> None:
+        """Consolidate bounded batches only after an uninterrupted quiet period."""
+        memory = self._memory
+        if memory is None:
+            return
+        quiet_since: float | None = None
+        while True:
+            await asyncio.sleep(2.0)
+            if self._snapshot().busy:
+                quiet_since = None
+                continue
+            n = self.cfg.memory.consolidate_every_n
+            if n <= 0 or await asyncio.to_thread(memory.count_unconsolidated) < n:
+                quiet_since = None
+                continue
+            now = time.monotonic()
+            if quiet_since is None:
+                quiet_since = now
+                continue
+            if now - quiet_since < self.cfg.memory.dreaming_idle_s:
+                continue
+            await self._run_consolidation(kind="quiet-time")
+            quiet_since = None
+
+    async def _run_consolidation(self, *, kind: str = "automatic") -> None:
         if self._memory is None or self._consolidating:
             return
         self._consolidating = True
         try:
-            turns = await asyncio.to_thread(self._memory.unconsolidated_turns)
+            limit = (self.cfg.memory.consolidate_every_n
+                     if kind == "quiet-time" else None)
+            turns = await asyncio.to_thread(self._memory.unconsolidated_turns, limit)
             if not turns:
                 return
             prev = await asyncio.to_thread(self._memory.latest_summary)
             existing = await asyncio.to_thread(self._memory.facts)
             summary, facts, remove = await consolidate(
                 self.llm, prev, turns, existing, clock=self.clock)
-            if summary:
-                await asyncio.to_thread(
-                    self._memory.add_summary, summary, turns[0][0], turns[-1][0]
-                )
-            for key, value in facts.items():
-                await asyncio.to_thread(self._memory.upsert_fact, key, value)
-            for key in remove:
-                await asyncio.to_thread(self._memory.delete_fact, key)
+            if kind == "quiet-time" and (
+                    self._snapshot().busy
+                    or time.monotonic() - self._last_activity
+                    < self.cfg.memory.dreaming_idle_s):
+                log.info("memory maintenance postponed because activity resumed")
+                return
+            await asyncio.to_thread(
+                self._memory.apply_consolidation, summary, turns[0][0], turns[-1][0],
+                facts, remove, kind,
+            )
             await self._refresh_stt_vocab()
             log.info("memory consolidated: %d turns -> summary=%s, +%d facts, -%d",
                      len(turns), bool(summary), len(facts), len(remove))

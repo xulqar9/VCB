@@ -129,6 +129,7 @@ def test_public_defaults_are_generic():
     cfg = AppConfig()
     assert cfg.backend == "ollama"
     assert cfg.server.cuda_visible_devices is None
+    assert cfg.memory.dreaming_enabled is False
     assert config.USER_NAME == "the user"
     for text in (cfg.resume.hint, cfg.proactive.hint, cfg.proactive.greeting_hint):
         assert "the user" in text

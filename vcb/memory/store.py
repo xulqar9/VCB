@@ -8,6 +8,7 @@ session behaves normally but leaves nothing on disk.
 """
 
 import contextlib
+import json
 import sqlite3
 import threading
 import time
@@ -36,6 +37,16 @@ CREATE TABLE IF NOT EXISTS summaries (
     text         TEXT NOT NULL,
     covers_range TEXT
 );
+CREATE TABLE IF NOT EXISTS consolidation_runs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts           REAL NOT NULL,
+    kind         TEXT NOT NULL,
+    summary_id   INTEGER,
+    summary_text TEXT,
+    covers_range TEXT NOT NULL,
+    facts_delta  TEXT NOT NULL,
+    undone       INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS notes (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
     ts   REAL NOT NULL,
@@ -52,6 +63,126 @@ CREATE TABLE IF NOT EXISTS reminders (
 
 
 _INITIAL_CAPACITY = 256
+_CONSOLIDATION_HISTORY_LIMIT = 100
+
+
+def _read_consolidation_history(db: sqlite3.Connection, limit: int) -> list[dict]:
+    exists = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='consolidation_runs'"
+    ).fetchone()
+    if not exists:
+        return []
+    rows = db.execute(
+        "SELECT r.id, r.ts, r.kind, r.summary_id, "
+        "COALESCE(s.text, r.summary_text), r.covers_range, "
+        "r.facts_delta, r.undone FROM consolidation_runs r "
+        "LEFT JOIN summaries s ON s.id = r.summary_id "
+        "ORDER BY r.id DESC LIMIT ?", (max(1, min(limit, _CONSOLIDATION_HISTORY_LIMIT)),)
+    ).fetchall()
+    history = []
+    for row in rows:
+        evidence = []
+        if row[5] and "-" in row[5]:
+            try:
+                start_id, end_id = (int(value) for value in row[5].split("-", 1))
+            except ValueError:
+                start_id = end_id = 0
+            if start_id and end_id >= start_id:
+                evidence = [
+                    {"id": turn[0], "text": turn[1]}
+                    for turn in db.execute(
+                        "SELECT id, text FROM turns WHERE id BETWEEN ? AND ? "
+                        "AND role = 'user' ORDER BY id",
+                        (start_id, end_id),
+                    ).fetchall()
+                ]
+        history.append({
+            "id": row[0],
+            "ts": row[1],
+            "kind": row[2],
+            "summary": row[4],
+            "covers_range": row[5],
+            "facts_delta": json.loads(row[6]),
+            "undone": bool(row[7]),
+            "evidence": evidence,
+        })
+    return history
+
+
+def _undo_consolidation(db: sqlite3.Connection, run_id: int) -> None:
+    db.execute("BEGIN IMMEDIATE")
+    with db:
+        row = db.execute(
+            "SELECT summary_id, facts_delta, undone FROM consolidation_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("That memory update is no longer available.")
+        summary_id, encoded_delta, undone = row
+        if undone:
+            raise ValueError("That memory update has already been undone.")
+        latest = db.execute(
+            "SELECT id FROM consolidation_runs WHERE undone = 0 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if latest is None or latest[0] != run_id:
+            raise ValueError("Only the newest applied memory update can be undone.")
+
+        delta = json.loads(encoded_delta)
+        for key, change in delta.items():
+            current = db.execute(
+                "SELECT value, source FROM facts WHERE key = ?", (key,)
+            ).fetchone()
+            after = change["after"]
+            if after is None:
+                matches = current is None
+            else:
+                matches = current is not None and current == (after["value"], after["source"])
+            if not matches:
+                raise ValueError(
+                    f"Memory fact {key!r} changed since this update; refusing to overwrite it."
+                )
+
+        if summary_id is not None:
+            latest_summary = db.execute(
+                "SELECT id FROM summaries ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if latest_summary is None or latest_summary[0] != summary_id:
+                raise ValueError(
+                    "A newer summary exists; refusing to undo over a later memory update."
+                )
+
+        for key, change in delta.items():
+            before = change["before"]
+            if before is None:
+                db.execute("DELETE FROM facts WHERE key = ?", (key,))
+            else:
+                db.execute(
+                    "INSERT INTO facts (key, value, ts, source) VALUES (?,?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+                    "ts=excluded.ts, source=excluded.source",
+                    (key, before["value"], before["ts"], before["source"]),
+                )
+        if summary_id is not None:
+            db.execute("DELETE FROM summaries WHERE id = ?", (summary_id,))
+        db.execute("UPDATE consolidation_runs SET undone = 1 WHERE id = ?", (run_id,))
+
+
+def read_consolidation_history(db_path: str | Path, limit: int = 20) -> list[dict]:
+    """Read recent memory changes for the local settings UI."""
+    path = Path(db_path)
+    if not path.is_file():
+        return []
+    with sqlite3.connect(path, timeout=1) as db:
+        return _read_consolidation_history(db, limit)
+
+
+def undo_latest_consolidation(db_path: str | Path, run_id: int) -> None:
+    """Undo the newest applied memory update without overwriting later edits."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise ValueError("The memory database is unavailable.")
+    with sqlite3.connect(path, timeout=1) as db:
+        _undo_consolidation(db, run_id)
 
 
 class MemoryStore:
@@ -174,14 +305,18 @@ class MemoryStore:
             return int(row[0].split("-")[1])
         return 0
 
-    def unconsolidated_turns(self) -> list[tuple[int, str, str, float]]:
+    def unconsolidated_turns(
+        self, limit: int | None = None
+    ) -> list[tuple[int, str, str, float]]:
         """Turns newer than the latest summary as (id, role, text, ts), oldest-first."""
         last = self.last_covered_id()
         with self._lock:
-            return self._db.execute(
-                "SELECT id, role, text, ts FROM turns WHERE id > ? ORDER BY id",
-                (last,),
-            ).fetchall()
+            query = "SELECT id, role, text, ts FROM turns WHERE id > ? ORDER BY id"
+            params: tuple = (last,)
+            if limit is not None:
+                query += " LIMIT ?"
+                params = (last, max(1, limit))
+            return self._db.execute(query, params).fetchall()
 
     def count_unconsolidated(self) -> int:
         last = self.last_covered_id()
@@ -198,6 +333,76 @@ class MemoryStore:
                 (time.time(), text, f"{start_id}-{end_id}"),
             )
             self._db.commit()
+
+    def apply_consolidation(self, summary: str | None, start_id: int, end_id: int,
+                            facts: dict[str, str], remove: list[str],
+                            kind: str = "automatic") -> int | None:
+        """Apply and record one reversible summary/fact update atomically."""
+        with self._lock, self._db:
+            self._db.execute("BEGIN IMMEDIATE")
+            delta: dict[str, dict] = {}
+            desired = {key: value for key, value in facts.items()}
+            desired.update({key: None for key in remove if key not in desired})
+            for key, value in desired.items():
+                row = self._db.execute(
+                    "SELECT value, source, ts FROM facts WHERE key = ?", (key,)
+                ).fetchone()
+                before = ({"value": row[0], "source": row[1], "ts": row[2]}
+                          if row is not None else None)
+                after = ({"value": value, "source": "consolidation"}
+                         if value is not None else None)
+                if before is None and after is None:
+                    continue
+                if (before is not None and after is not None
+                        and before["value"] == after["value"]
+                        and before["source"] == after["source"]):
+                    continue
+                delta[key] = {"before": before, "after": after}
+
+            summary_id = None
+            if summary:
+                cursor = self._db.execute(
+                    "INSERT INTO summaries (ts, text, covers_range) VALUES (?,?,?)",
+                    (time.time(), summary, f"{start_id}-{end_id}"),
+                )
+                summary_id = cursor.lastrowid
+
+            for key, change in delta.items():
+                after = change["after"]
+                if after is None:
+                    self._db.execute("DELETE FROM facts WHERE key = ?", (key,))
+                else:
+                    self._db.execute(
+                        "INSERT INTO facts (key, value, ts, source) VALUES (?,?,?,?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+                        "ts=excluded.ts, source=excluded.source",
+                        (key, after["value"], time.time(), after["source"]),
+                    )
+
+            if summary_id is None and not delta:
+                return None
+            cursor = self._db.execute(
+                "INSERT INTO consolidation_runs "
+                "(ts, kind, summary_id, summary_text, covers_range, facts_delta) "
+                "VALUES (?,?,?,?,?,?)",
+                (time.time(), kind, summary_id, summary, f"{start_id}-{end_id}",
+                 json.dumps(delta, ensure_ascii=True)),
+            )
+            run_id = cursor.lastrowid
+            self._db.execute(
+                "DELETE FROM consolidation_runs WHERE id NOT IN "
+                "(SELECT id FROM consolidation_runs ORDER BY id DESC LIMIT ?)",
+                (_CONSOLIDATION_HISTORY_LIMIT,),
+            )
+            return run_id
+
+    def consolidation_history(self, limit: int = 20) -> list[dict]:
+        with self._lock:
+            return _read_consolidation_history(self._db, limit)
+
+    def undo_consolidation(self, run_id: int) -> None:
+        with self._lock:
+            _undo_consolidation(self._db, run_id)
 
     def latest_summary(self) -> str | None:
         entry = self.latest_summary_entry()
@@ -299,7 +504,7 @@ class MemoryStore:
         with self._lock:
             self._db.executescript(
                 "DELETE FROM turns; DELETE FROM facts; DELETE FROM summaries; "
-                "DELETE FROM notes; DELETE FROM reminders;"
+                "DELETE FROM consolidation_runs; DELETE FROM notes; DELETE FROM reminders;"
             )
             self._db.commit()
             self._ids = []

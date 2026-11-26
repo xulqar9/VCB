@@ -3,6 +3,7 @@ shutdown, and lazy VAD loading. Fake engines keep this GPU/device-free."""
 
 import asyncio
 import contextlib
+from types import SimpleNamespace
 
 from vcb.config import AppConfig
 from vcb.orchestrator import Orchestrator, _SENTINEL
@@ -67,6 +68,67 @@ def _drain(orch):
     while not orch._tts_queue.empty():
         items.append(orch._tts_queue.get_nowait())
     return items
+
+
+class _MemoryWithTurns:
+    def count_unconsolidated(self):
+        return 40
+
+
+def test_dreaming_defers_consolidation_until_idle(monkeypatch):
+    async def _run():
+        orch = _orch(_FakeLLM([]))
+        orch.cfg.memory.dreaming_enabled = True
+        orch.cfg.memory.consolidate_every_n = 40
+        orch.cfg.memory.dreaming_idle_s = 0.02
+        orch._memory = _MemoryWithTurns()
+        orch._maybe_consolidate()
+        assert orch._consolidate_task is None
+
+        calls = []
+        completed = asyncio.Event()
+        busy = iter((False, True, False, False, False, False, False))
+        ticks = []
+
+        async def _consolidate(*, kind):
+            calls.append(kind)
+            completed.set()
+
+        orch._run_consolidation = _consolidate
+        orch._snapshot = lambda: SimpleNamespace(busy=next(busy, False))
+        real_sleep = asyncio.sleep
+
+        async def _short_sleep(_seconds):
+            ticks.append(None)
+            await real_sleep(0.01)
+
+        monkeypatch.setattr("vcb.orchestrator.asyncio.sleep", _short_sleep)
+        task = asyncio.create_task(orch._memory_maintenance_loop())
+        try:
+            await asyncio.wait_for(completed.wait(), timeout=1)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        assert calls == ["quiet-time"]
+        assert len(ticks) >= 5
+
+    asyncio.run(_run())
+
+
+def test_legacy_consolidation_still_starts_immediately():
+    async def _run():
+        orch = _orch(_FakeLLM([]))
+        orch.cfg.memory.consolidate_every_n = 40
+        orch._memory = _MemoryWithTurns()
+        orch._maybe_consolidate()
+        task = orch._consolidate_task
+        assert task is not None
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_run())
 
 
 def test_partial_failure_is_resumable_not_completed():

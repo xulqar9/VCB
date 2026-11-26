@@ -78,6 +78,106 @@ def test_consolidation_bookkeeping():
     s.close()
 
 
+def test_consolidation_update_can_be_undone_without_losing_previous_facts():
+    s = _store()
+    s.add_summary("Earlier summary", 1, 2)
+    s.upsert_fact("city", "Oslo", source="user")
+    s.upsert_fact("weather", "windy")
+
+    run_id = s.apply_consolidation(
+        "Updated summary", 3, 5, {"city": "Berlin", "hobby": "chess"}, ["weather"],
+        kind="quiet-time",
+    )
+    assert run_id is not None
+    assert s.latest_summary() == "Updated summary"
+    assert s.facts() == {"city": "Berlin", "hobby": "chess"}
+    entry, = s.consolidation_history()
+    assert entry["kind"] == "quiet-time"
+    assert entry["summary"] == "Updated summary"
+
+    s.undo_consolidation(run_id)
+
+    assert s.latest_summary() == "Earlier summary"
+    assert s.facts() == {"city": "Oslo", "weather": "windy"}
+    assert s._db.execute("SELECT source FROM facts WHERE key='city'").fetchone()[0] == "user"
+    undone, = s.consolidation_history()
+    assert undone["undone"] is True
+    assert undone["summary"] == "Updated summary"
+    s.close()
+
+
+def test_undo_refuses_to_overwrite_a_fact_changed_since_consolidation():
+    s = _store()
+    s.upsert_fact("city", "Oslo")
+    run_id = s.apply_consolidation("Moved", 1, 2, {"city": "Berlin"}, [])
+    s.upsert_fact("city", "Paris", source="user")
+
+    try:
+        s.undo_consolidation(run_id)
+    except ValueError as exc:
+        assert "changed since" in str(exc)
+    else:
+        raise AssertionError("undo should refuse to overwrite a newer fact")
+    assert s.get_fact("city") == "Paris"
+    s.close()
+
+
+def test_undo_only_allows_the_newest_applied_consolidation():
+    s = _store()
+    first = s.apply_consolidation("First", 1, 2, {}, [])
+    second = s.apply_consolidation("Second", 3, 4, {}, [])
+    assert first is not None and second is not None
+
+    try:
+        s.undo_consolidation(first)
+    except ValueError as exc:
+        assert "newest applied" in str(exc)
+    else:
+        raise AssertionError("undo should only allow the newest applied update")
+    s.undo_consolidation(second)
+    assert s.latest_summary() == "First"
+    s.close()
+
+
+def test_history_survives_restart_and_can_be_undone_from_settings(tmp_path):
+    from vcb.memory.store import read_consolidation_history, undo_latest_consolidation
+
+    db_path = tmp_path / "memory.db"
+    s = MemoryStore(str(db_path))
+    s.add_turn("sess", "user", "I moved to Berlin.", _vec(1, 0, 0))
+    s.add_turn("sess", "assistant", "I will remember.", _vec(0, 1, 0))
+    s.add_turn("sess", "user", "My old city was Oslo.", _vec(1, 0, 0))
+    s.upsert_fact("city", "Oslo")
+    run_id = s.apply_consolidation("Moved to Berlin", 1, 3, {"city": "Berlin"}, [])
+    s.close()
+
+    history, = read_consolidation_history(db_path)
+    assert history["id"] == run_id
+    assert [turn["text"] for turn in history["evidence"]] == [
+        "I moved to Berlin.", "My old city was Oslo."
+    ]
+    undo_latest_consolidation(db_path, run_id)
+    s = MemoryStore(str(db_path))
+    assert s.get_fact("city") == "Oslo"
+    assert s.consolidation_history()[0]["undone"] is True
+    s.close()
+
+
+def test_existing_database_without_history_table_is_migrated(tmp_path):
+    from vcb.memory.store import read_consolidation_history
+
+    db_path = tmp_path / "memory.db"
+    s = MemoryStore(str(db_path))
+    s._db.execute("DROP TABLE consolidation_runs")
+    s._db.commit()
+    s.close()
+
+    assert read_consolidation_history(db_path) == []
+    s = MemoryStore(str(db_path))
+    assert s.consolidation_history() == []
+    s.close()
+
+
 def test_clear_wipes_everything():
     s = _store()
     s.add_turn("sess", "user", "x", _vec(1, 0, 0))
@@ -87,6 +187,7 @@ def test_clear_wipes_everything():
     assert s.recall(_vec(1, 0, 0), top_k=5, min_similarity=0.0) == []
     assert s.facts_block() == ""
     assert s.list_notes() == []
+    assert s.consolidation_history() == []
     s.close()
 
 

@@ -378,12 +378,37 @@ class SettingsWindow:
         opts.grid(row=self.row, column=0, columnspan=3, sticky="w")
         self.row += 1
         self.memory = tk.BooleanVar(value=truthy("VCB_MEMORY_ENABLED", "true"))
+        self.memory_dreaming = tk.BooleanVar(
+            value=truthy("VCB_MEMORY_DREAMING", "false"))
         self.ai_led = tk.BooleanVar(value=truthy("VCB_AI_LED", "false"))
         self.avatar = tk.BooleanVar(value=truthy("VCB_AVATAR_ENABLED", "false"))
-        for var, text in ((self.memory, "Long-term memory"),
-                          (self.ai_led, "Assistant starts conversations"),
+        ttk.Checkbutton(opts, text="Long-term memory", variable=self.memory,
+                        command=self._refresh).pack(side="left", padx=(0, 12))
+        for var, text in ((self.ai_led, "Assistant starts conversations"),
                           (self.avatar, "Unreal avatar")):
-            ttk.Checkbutton(opts, text=text, variable=var).pack(side="left", padx=(0, 12))
+            ttk.Checkbutton(opts, text=text, variable=var).pack(
+                side="left", padx=(0, 12))
+        self.memory_dreaming_check = ttk.Checkbutton(
+            frame, text="Quiet-time memory maintenance (automatic, reversible)",
+            variable=self.memory_dreaming, command=self._refresh,
+        )
+        self.memory_dreaming_check.grid(
+            row=self.row, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.row += 1
+        ttk.Label(
+            frame,
+            text=("Waits for 40 new turns and 2 quiet minutes before updating memory. "
+                  "With a cloud AI, conversation text is sent to that provider. "
+                  "Review changes and undo the newest update below. When off, VCB "
+                  "continues its usual 40-turn memory updates."),
+            foreground="gray", wraplength=650, justify="left",
+        ).grid(row=self.row, column=0, columnspan=3, sticky="w")
+        self.row += 1
+        self.memory_history_button = ttk.Button(
+            frame, text="Review / undo memory updates", command=self._open_memory_history)
+        self.memory_history_button.grid(
+            row=self.row, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.row += 1
 
         # -- online search ----------------------------------------------------
         self._heading("Online search (optional)")
@@ -467,6 +492,9 @@ class SettingsWindow:
         self.hearing_info.config(text=hearing_description(
             self.hear_sounds.get(), self.voice_emotion.get(), self.voice_traits.get(),
             importlib.util.find_spec("funasr") is not None))
+        if hasattr(self, "memory_dreaming"):
+            self.memory_dreaming_check.configure(
+                state="normal" if self.memory.get() else "disabled")
         if backend == "ollama":
             self._update_models()
             if _ollama_running(self.ollama_base):
@@ -480,6 +508,11 @@ class SettingsWindow:
                 self.ollama_status.config(
                     text="Ollama not found - install it first", foreground="red")
                 self.ollama_link.grid()
+
+    def _open_memory_history(self) -> None:
+        from .memory.history_ui import MemoryHistoryWindow
+
+        MemoryHistoryWindow(self.root, resolve_path(r"logs\memory.db"))
 
     def _engine_description(self, engine: str) -> tuple[str, bool]:
         """Explanation for the chosen engine plus whether it flags a problem
@@ -666,6 +699,7 @@ class SettingsWindow:
             "VCB_INPUT_DEVICE": device(self.mic),
             "VCB_OUTPUT_DEVICE": device(self.speaker),
             "VCB_MEMORY_ENABLED": bool_str(self.memory),
+            "VCB_MEMORY_DREAMING": bool_str(self.memory_dreaming),
             "VCB_AI_LED": bool_str(self.ai_led),
             "VCB_AVATAR_ENABLED": bool_str(self.avatar),
             "VCB_HEAR_SOUNDS": bool_str(self.hear_sounds),

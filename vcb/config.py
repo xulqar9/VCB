@@ -607,6 +607,8 @@ class MemoryConfig:
     """Durable long-term memory: past turns embedded and recalled by similarity."""
     enabled: bool = field(default_factory=lambda: _env_bool("VCB_MEMORY_ENABLED", True))
     ephemeral: bool = field(default_factory=lambda: _env_bool("VCB_MEMORY_EPHEMERAL", False))
+    dreaming_enabled: bool = field(
+        default_factory=lambda: _env_bool("VCB_MEMORY_DREAMING", False))
     db_path: str = r"logs\memory.db"
     embed_model: str = "BAAI/bge-small-en-v1.5"   # 384-d, runs on CPU
     embed_cache_dir: str = r"models\fastembed"     # persistent (not the OS temp folder)
@@ -616,6 +618,7 @@ class MemoryConfig:
     min_similarity: float = 0.55         # cosine floor; below this = not relevant
     max_recall_chars: int = 1200         # cap injected memory text
     consolidate_every_n: int = 40        # (Phase 2) turns between summaries
+    dreaming_idle_s: int = 120           # uninterrupted idle time before maintenance
     # Cap on embeddings kept in RAM for recall (newest win; 0 = unlimited).
     # Older turns stay in SQLite and live on through consolidated summaries.
     max_index_rows: int = 50_000

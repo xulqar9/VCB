@@ -58,6 +58,17 @@ _GENERIC = {
     "some", "into", "also", "being", "doing", "does", "have", "has", "using",
     "uses", "wants", "want", "would", "should", "things", "stuff",
 }
+_PREFERENCE_VERBS = {
+    "like": "like", "likes": "like", "love": "love", "loves": "love",
+    "prefer": "prefer", "prefers": "prefer", "enjoy": "enjoy", "enjoys": "enjoy",
+    "want": "want", "wants": "want",
+}
+_NEGATION = r"(?:do\s+not|don't|does\s+not|doesn't|did\s+not|didn't|never)"
+_CORRECTION_CUE = re.compile(
+    r"\b(?:wrong|incorrect|no\s+longer|not\s+anymore|do\s+not|don't|"
+    r"does\s+not|doesn't|did\s+not|didn't|correction)\b",
+    re.IGNORECASE,
+)
 
 
 def _content_words(text: str) -> list[str]:
@@ -76,8 +87,23 @@ def grounded(value: str, user_text: str) -> bool:
     if not words:
         return True                       # nothing distinctive to check (e.g. "yes")
     corpus = user_text.lower()
+    for word in re.findall(r"[a-z']+", value.lower()):
+        verb = _PREFERENCE_VERBS.get(word)
+        if verb and re.search(
+            rf"\b{_NEGATION}\s+(?:(?:really|actually)\s+)?{verb}(?:s|d)?\b",
+            corpus,
+        ):
+            return False
     hits = sum(1 for w in words if w[:4] in corpus)
     return hits * 2 >= len(words)
+
+
+def _user_corrected(value: str, user_text: str) -> bool:
+    words = _content_words(value)
+    if not words or not _CORRECTION_CUE.search(user_text):
+        return False
+    corpus = user_text.lower()
+    return any(word[:4] in corpus for word in words)
 
 
 def _norm(value: str) -> str:
@@ -146,7 +172,6 @@ async def consolidate(
     raw_facts = data.get("facts") or {}
     raw_facts = raw_facts if isinstance(raw_facts, dict) else {}
     user_text = " ".join(t[2] for t in turns if t[1] == "user")
-    known = user_text + " " + " ".join(existing.values())
     taken = {_norm(v): k for k, v in existing.items()}
     facts: dict[str, str] = {}
     for k, v in raw_facts.items():
@@ -156,7 +181,11 @@ async def consolidate(
         if _TRANSIENT_KEY.search(key):
             log.info("memory: skipping momentary fact %s=%r", key, value)
             continue
-        if not grounded(value, known):
+        prior = existing.get(key)
+        evidence = user_text
+        if prior is not None and _norm(prior) == _norm(value):
+            evidence += " " + prior
+        if not grounded(value, evidence):
             log.info("memory: skipping fact the user never mentioned %s=%r", key, value)
             continue
         dup_of = taken.get(_norm(value))
@@ -166,9 +195,18 @@ async def consolidate(
         taken[_norm(value)] = key
 
     raw_remove = data.get("remove") or []
-    remove = [str(k) for k in raw_remove if isinstance(k, str) and str(k) in existing] \
-        if isinstance(raw_remove, list) else []
-    # Momentary facts stored by older versions are cleaned up too.
-    remove += [k for k in existing if _TRANSIENT_KEY.search(k) and k not in remove]
-    remove = [k for k in remove if k not in facts]
+    requested_remove = (
+        {k for k in raw_remove if isinstance(k, str) and k in existing}
+        if isinstance(raw_remove, list) else set()
+    )
+    remove = []
+    for key, value in existing.items():
+        duplicates = any(
+            other_key != key and _norm(other_value) == _norm(value)
+            for other_key, other_value in existing.items()
+        )
+        if (_TRANSIENT_KEY.search(key) or duplicates
+                or (key in requested_remove and _user_corrected(value, user_text))):
+            remove.append(key)
+    remove = [key for key in remove if key not in facts]
     return summary, facts, remove

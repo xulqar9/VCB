@@ -269,6 +269,14 @@ Most people only ever use the settings window. Under the hood:
 | **`user/`** | Your personal stuff, git-ignored: `user/prompts/*.txt` (your personas), `user/voices/` (voice samples), `user/models.json` (llama.cpp presets). |
 | **[`vcb/config.py`](vcb/config.py)** | Every other tunable (VAD sensitivity, chunk sizes, memory thresholds, barge-in behavior, …) as typed dataclasses. |
 
+**Quiet-time memory maintenance** is optional and off by default. Enable it in
+settings (or set `VCB_MEMORY_DREAMING=true`) to let VCB update long-term memory
+after at least 40 new turns and two uninterrupted quiet minutes. It uses your
+configured AI provider; conversation text is sent there when you use a cloud
+provider. Use **Review / undo memory updates** in settings to inspect the
+changes and their source turns, or undo the newest update. With this option off,
+the existing 40-turn memory consolidation behavior is unchanged.
+
 <details>
 <summary><b>Launcher & command-line options</b></summary>
 

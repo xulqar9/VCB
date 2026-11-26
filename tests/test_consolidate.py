@@ -24,6 +24,7 @@ def test_grounded():
     assert grounded("Platinum 3", user)               # "plat" matches "Platz"
     assert not grounded("Enjoys playing guitar", user)
     assert grounded("yes", user)                      # nothing distinctive to check
+    assert not grounded("likes long answers", "I do not like long answers.")
 
 
 def test_consolidate_filters_invented_momentary_and_duplicate_facts():
@@ -57,3 +58,38 @@ def test_consolidate_handles_bad_output():
             yield "sorry, I can't do that"
 
     assert asyncio.run(consolidate(_Junk(), None, [(1, "user", "hi")])) == (None, {}, [])
+
+
+def test_changed_fact_must_be_supported_by_new_user_turns():
+    turns = [(1, "user", "I do not like long answers.")]
+    llm = _ScriptedLLM({
+        "summary": "Dislikes long answers.",
+        "facts": {"answer_style": "likes concise answers"},
+        "remove": [],
+    })
+    summary, facts, remove = asyncio.run(consolidate(
+        llm, None, turns, {"answer_style": "likes long answers"}))
+    assert summary == "Dislikes long answers."
+    assert facts == {}
+    assert remove == []
+
+
+def test_remove_requires_transience_duplicate_or_user_correction():
+    turns = [(1, "user", "I actually like Oslo.")]
+    llm = _ScriptedLLM({
+        "summary": "Likes Oslo.",
+        "facts": {},
+        "remove": ["city"],
+    })
+    summary, facts, remove = asyncio.run(consolidate(
+        llm, None, turns, {"city": "Oslo"}))
+    assert remove == []
+
+    turns = [(1, "user", "Oslo is wrong; I live in Berlin now.")]
+    llm = _ScriptedLLM({
+        "summary": "Lives in Berlin.",
+        "facts": {},
+        "remove": ["city"],
+    })
+    _, _, remove = asyncio.run(consolidate(llm, None, turns, {"city": "Oslo"}))
+    assert remove == ["city"]
