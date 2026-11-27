@@ -464,7 +464,8 @@ over-strict pins in chatterbox-tts / orpheus-cpp), `requirements-search.txt`
 - [x] One-click Windows launcher and settings window
 - [x] Live word-by-word transcript
 - [x] Private web search (Tor / VPN, optional)
-- [ ] Weather skill
+- [x] Weather skill
+- [ ] Phone web UI: run VCB on your PC, talk to it from your phone's browser
 - [ ] Linux / macOS support
 - [ ] Webcam-based gaze for the 3D avatar
 
