@@ -15,7 +15,7 @@ from vcb.config import AppConfig
 from vcb.llm.base import ToolCallRequest
 from vcb.memory.store import MemoryStore
 from vcb.orchestrator import Orchestrator, _SENTINEL
-from vcb.search.skill import NotSetUp, WebSearchSkill
+from vcb.search.skill import NotSetUp, WeatherSkill, WebSearchSkill
 from vcb.skills import SkillRegistry, build_skills
 
 from test_orchestrator import _FakeSTT, _FakeTTS, _orch
@@ -221,6 +221,19 @@ def test_native_mode_uses_tool_role_and_hides_args(caplog):
     assert "web_search (arguments not logged)" in caplog.text
 
 
+def test_weather_tool_arguments_are_not_logged(caplog):
+    caplog.set_level(logging.INFO, logger="vcb.orchestrator")
+    orch = _orch(_Script([]))
+    orch._skills = SkillRegistry([WeatherSkill(_Svc())])
+
+    asyncio.run(orch._run_tool(
+        "weather", {"location": "SENSITIVE-CITY"}, None, ["already speaking"], 0, True
+    ))
+
+    assert "weather (arguments not logged)" in caplog.text
+    assert "SENSITIVE-CITY" not in caplog.text
+
+
 def test_sensitive_skill_errors_are_redacted(caplog):
     class _Boom:
         ready = True
@@ -263,4 +276,5 @@ def test_enabled_and_valid_builds_service_without_network():
     cfg.search.backend, cfg.search.url = "searxng", "https://search.example.org"
     orch = Orchestrator(cfg, _FakeSTT(), _Script([]), _FakeTTS())
     assert orch._search is not None and orch._search.route.state == "starting"
-    assert orch._skills.names() == ["web_search"]        # works with other skills off
+    assert orch._skills.names() == ["web_search", "weather"]  # works with other skills off
+    assert isinstance(orch._skills.get("weather"), WeatherSkill)

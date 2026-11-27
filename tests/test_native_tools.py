@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from vcb.config import LLMConfig
 from vcb.llm.base import ToolCallRequest
 from vcb.llm.openai_compat import OpenAICompatLLM
+from vcb.search.skill import WeatherSkill
 from vcb.skills import SkillRegistry, build_skills
 
 
@@ -65,6 +66,10 @@ def test_openai_tool_specs():
     rem = next(s["function"] for s in specs if s["function"]["name"] == "set_reminder")
     assert rem["parameters"]["properties"]["in_minutes"]["type"] == "number"
     assert rem["parameters"]["properties"]["at"]["type"] == "string"
+
+    weather = next(s["function"] for s in SkillRegistry(
+        [WeatherSkill(None)]).openai_tools() if s["function"]["name"] == "weather")
+    assert weather["parameters"]["properties"]["location"]["type"] == "string"
 
 
 def test_orchestrator_native_tool_loop():

@@ -254,10 +254,17 @@ class Orchestrator:
         self._turn_tainted = False        # web results are in this turn's context
         self._turn_filler = ""            # the "let me look that up" line, if spoken
         search_skill = self._load_search(cfg) if cfg.search.enabled else None
+        weather_skill = None
+        if cfg.search.enabled:
+            from .search.skill import WeatherSkill
+
+            weather_skill = WeatherSkill(self._search)
         if cfg.skills.enabled or search_skill is not None:
             skills = build_skills(cfg.skills.enabled_skills) if cfg.skills.enabled else []
             if search_skill is not None:
                 skills.append(search_skill)
+            if weather_skill is not None:
+                skills.append(weather_skill)
             self._skills = SkillRegistry(skills)
             mode = cfg.skills.tool_mode
             native = mode == "native" or (mode == "auto" and cfg.backend == "cloud")

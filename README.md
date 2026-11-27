@@ -40,7 +40,7 @@ say *"go on"*. One double-click to install, no Python setup required.
 | 🧠 **Any brain** | Local & free with **Ollama**, free-tier **Google Gemini**, **OpenAI**, OpenRouter, Groq, or your own GGUF via llama.cpp. |
 | 💾 **Long-term memory** | Remembers facts about you and past conversations across sessions — stored in a local file on your PC. |
 | 🛠️ **Tools** | Timers, reminders, calculator, notes — called by the model mid-conversation. Reminders take real times (*"Monday at 8"*) and survive restarts. |
-| 🔎 **Private web search** *(optional, off by default)* | Looks up current information when it needs to — only through **Tor** or **your VPN**, never directly, and nothing you ask is logged. |
+| 🔎 **Private web search & weather** *(optional, off by default)* | Looks up current information and city-based weather forecasts — only through **Tor** or **your VPN**, never directly; tool arguments and results aren't written to system logs. |
 | 🕒 **Knows the date & time** | Always knows the current date, time and your time zone, how long ago things were said, and turns *"next Monday"* into a real date in its memory. |
 | 💬 **Live transcript** | A chat window that writes each word as it's heard, so you can read along. |
 | 🎭 **Personas** | 10 built-in personalities (coach, mentor, storyteller, devil's advocate, …) — or write your own in a text file. |
@@ -211,13 +211,15 @@ an authentication gateway in front of SearXNG specifically requires it.
 
 While you talk, the model decides when a question needs the web; VCB says a
 short *"let me look that up"* and answers with what it found (it gives up after
-a few seconds and answers from memory instead).
+a few seconds and answers from memory instead). Ask for weather by city to get
+current conditions and a three-day forecast from Open-Meteo; the weather tool
+doesn't save a default location.
 
 | Guarantee | How |
 |---|---|
 | **Fails closed** | Searches only run after the route is verified (Tor: the Tor Project's own check; VPN: the VPN adapter is up and traffic leaves through it). If it drops, searching stops and the assistant says it couldn't check online — there's never a direct fallback. |
 | **No DNS leaks** | Tor/proxy: `socks5h://`, so the proxy resolves names. VPN adapter: your VPN's own DNS server, asked inside the tunnel (DNS over HTTPS through the VPN as a fallback). The self-test watches for any lookup through your normal resolver. |
-| **Nothing logged** | Questions, results and IP addresses never reach the logs; only *"web search: ok via tor in 2.1s (5 results)"*. Turns that used the web aren't saved to long-term memory. |
+| **Private tool logs** | Search/weather tool arguments, provider results and IP addresses aren't written to system logs; the normal local conversation transcript is unchanged. Turns that used online data aren't saved to long-term memory. |
 | **Results are untrusted** | Text from the web is cleaned, cut short, fenced off and the model is told never to follow instructions inside it; after a search, no other tool (timers, notes, …) can be used in that reply. |
 
 > [!NOTE]
