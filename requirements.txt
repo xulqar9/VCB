@@ -1,8 +1,8 @@
 # Core dependencies -- what every setup needs (Kokoro preset voice, Whisper
 # speech recognition, any OpenAI-compatible LLM, memory). The other voice
 # engines are installed on demand when you pick them in the settings:
-# requirements-chatterbox.txt / -xtts.txt / -orpheus.txt / -csm.txt
-# (IndexTTS gets its own isolated runtime, see scripts\launch.ps1).
+# requirements-chatterbox.txt / -orpheus.txt. (-xtts.txt / -csm.txt belong to
+# retired voices and aren't installed any more; see vcb\hardware.py.)
 #
 # End users: don't install these by hand, just run VCB.bat -- it sets up a
 # private Python, the right PyTorch build for your GPU, and everything below.

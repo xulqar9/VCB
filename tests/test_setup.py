@@ -209,11 +209,20 @@ def test_amd_gpu_speech_recognition(monkeypatch):
     adapt_to_hardware(cfg, "chatterbox-turbo", backend="rocm")
     assert cfg.stt.device == "cpu" and cfg.stt.model == cfg.stt.cpu_model
     assert os.environ["KMP_DUPLICATE_LIB_OK"] == "TRUE"
-    # NVIDIA-only engines still clone the sample, through chatterbox.
-    for engine in ("indextts", "orpheus"):
-        assert adapt_to_hardware(AppConfig(), engine, backend="rocm") == "chatterbox-turbo"
-    for engine in ("kokoro", "xtts", "csm"):
-        assert adapt_to_hardware(AppConfig(), engine, backend="rocm") == engine
+    # Orpheus is NVIDIA-only: an AMD GPU speaks (and clones) through chatterbox.
+    assert adapt_to_hardware(AppConfig(), "orpheus", backend="rocm") == "chatterbox-turbo"
+    assert adapt_to_hardware(AppConfig(), "kokoro", backend="rocm") == "kokoro"
+
+
+@pytest.mark.parametrize("engine", ["indextts", "xtts", "csm"])
+def test_a_retired_voice_still_in_env_falls_back_to_chatterbox(engine, caplog):
+    # Retired voices aren't installed any more; a saved choice must not stop VCB.
+    expected = {"cuda": "chatterbox-turbo", "rocm": "chatterbox-turbo", "cpu": "kokoro"}
+    for backend, voice in expected.items():
+        assert adapt_to_hardware(AppConfig(), engine, backend=backend) == voice
+    assert "no longer part of VCB" in caplog.text
+    with pytest.raises(ValueError, match="unknown TTS engine 'nope'"):
+        adapt_to_hardware(AppConfig(), "nope", backend="cuda")
 
 
 def test_bypass_miopen_rnn_disables_cudnn_only_inside_rnns():

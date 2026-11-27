@@ -5,8 +5,7 @@
 # CPU), VCB's base dependencies (Kokoro preset voice, Whisper, memory) and the
 # voice engine chosen in the settings into .runtime\ next to this repo. Later
 # runs start VCB straight away; dependencies are only (re)installed when the
-# requirements files change or a different voice engine was chosen. Choosing
-# the IndexTTS voice adds its own isolated environment (.runtime\indextts).
+# requirements files change or a different voice engine was chosen.
 # Delete .runtime\ to uninstall all of it.
 #
 # Launcher switches (anything else is passed through to main.py):
@@ -182,7 +181,8 @@ $Previous = if (Test-Path $Stamp) { (Get-Content $Stamp -Raw).Trim() } else { ""
 # -- voice engine packs ---------------------------------------------------------
 # The base install only has the Kokoro preset voice. The engine chosen in the
 # settings is installed on the next start (and stays installed when you switch
-# again). --extras installs all of them. IndexTTS is special: see below.
+# again). --extras installs all of them. Retired voices (RETIRED_TTS_ENGINES in
+# vcb\hardware.py) are never installed: their lines below are commented out.
 function Get-TtsEngine {
     if ($env:VCB_TTS_ENGINE) { return $env:VCB_TTS_ENGINE }
     $envFile = Join-Path $Root ".env"
@@ -204,27 +204,32 @@ function Test-EnvFlag($name) {
     return $value -in @("1", "true", "yes", "on")
 }
 $Engine = Get-TtsEngine
+# A retired voice still saved in .env: main.py speaks with Chatterbox instead,
+# so that's the pack to install.
+if ($Engine -in @("indextts", "xtts", "csm")) { $Engine = "chatterbox-turbo" }
 # pack -> requirements file
 $PackFiles = [ordered]@{
     "chatterbox-turbo" = "requirements-chatterbox.txt"
-    "xtts"             = "requirements-xtts.txt"
+    # "xtts"           = "requirements-xtts.txt"        # retired
     "orpheus"          = "requirements-orpheus.txt"
-    "csm"              = "requirements-csm.txt"
+    # "csm"            = "requirements-csm.txt"         # retired
     "emotion"          = "requirements-emotion.txt"
 }
-$PackNames = @{ "chatterbox-turbo" = "the Chatterbox voice engine"; "xtts" = "the XTTS voice engine";
-                "orpheus" = "the Orpheus voice engine"; "csm" = "the Sesame CSM voice engine";
-                "emotion" = "voice emotion recognition" }
+$PackNames = @{ "chatterbox-turbo" = "the Chatterbox voice engine";
+                # "xtts" = "the XTTS voice engine"; "csm" = "the Sesame CSM voice engine";   # retired
+                "orpheus" = "the Orpheus voice engine"; "emotion" = "voice emotion recognition" }
 $Packs = @()
 if ($Previous -match "packs=([^\r\n]*)") { $Packs += ($Matches[1].Split(",") | Where-Object { $_ }) }
 if ($Extras -or $Previous -match "extras=True") { $Packs += @($PackFiles.Keys) }
 if ($PackFiles.Contains($Engine)) { $Packs += $Engine }
 if (Test-EnvFlag "VCB_VOICE_EMOTION") { $Packs += "emotion" }
-# Without an NVIDIA GPU, main.py swaps IndexTTS/Orpheus for Chatterbox (AMD) or
-# the preset voice (CPU): make sure what it falls back to is installed.
-if ($Flavor -eq "rocm" -and $Engine -in @("indextts", "orpheus")) { $Packs += "chatterbox-turbo" }
+# Without an NVIDIA GPU, main.py swaps Orpheus for Chatterbox (AMD) or the
+# preset voice (CPU): make sure what it falls back to is installed.
+if ($Flavor -eq "rocm" -and $Engine -eq "orpheus") { $Packs += "chatterbox-turbo" }
 if ($Flavor -ne "cu128") { $Packs = @($Packs | Where-Object { $_ -ne "orpheus" }) }   # CUDA-only wheels
-$Packs = @($Packs | Sort-Object -Unique)
+# An older install may list retired packs: they're no longer installed or updated
+# (what's already in .runtime stays there).
+$Packs = @($Packs | Where-Object { $PackFiles.Contains($_) } | Sort-Object -Unique)
 
 $reqFiles = @("requirements.txt", "requirements-lock.txt", $Overrides) + @($Packs | ForEach-Object { $PackFiles[$_] })
 $hash = ($reqFiles | ForEach-Object { (Get-FileHash (Join-Path $Root $_) -Algorithm SHA256).Hash }) -join ""
@@ -283,10 +288,11 @@ if ($Previous -ne $want) {
     Set-Content $Stamp $want -NoNewline
 }
 
-# -- IndexTTS voice engine (only when selected) --------------------------------
+# -- IndexTTS voice engine (retired: no longer installed) ----------------------
 # IndexTTS pins Python 3.11, torch 2.8 and an older transformers, so it gets its
 # own isolated environment from its upstream lockfile (VCB talks to it through
-# vcb\tts\indextts_worker.py). Installed on the first start after choosing it.
+# vcb\tts\indextts_worker.py). Kept for bringing the voice back; see the
+# commented-out call below.
 $IndexDir = Join-Path $Runtime "indextts"
 $IndexCommit = "d9e41aac89fd00b3d71497fddb287b7f24613712"   # index-tts/index-tts, IndexTTS-2.5
 
@@ -342,7 +348,7 @@ function Ensure-IndexTTS {
     Set-Content $stamp $want -NoNewline
 }
 
-if ($Engine -eq "indextts") { Ensure-IndexTTS }
+# if ($Engine -eq "indextts") { Ensure-IndexTTS }     # retired
 
 # -- online search (optional) ---------------------------------------------------
 # Only when switched on in the settings: install whatever it still needs

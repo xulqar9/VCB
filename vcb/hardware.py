@@ -10,7 +10,15 @@ from .config import AppConfig, pick_stt_engine
 
 log = logging.getLogger("vcb.hardware")
 
-TTS_ENGINES = ("chatterbox-turbo", "kokoro", "indextts", "xtts", "orpheus", "csm")
+# The voices VCB offers.
+TTS_ENGINES = ("chatterbox-turbo", "kokoro", "orpheus")
+# Retired voices -> display name. Their code stays in vcb/tts/ (and
+# tools/tts_benchmark.py can still test them where they're installed), but the
+# settings window doesn't offer them, the launcher doesn't install them, and a
+# saved choice falls back to Chatterbox. To bring one back, move it to
+# TTS_ENGINES and uncomment its lines marked "retired" in main.py,
+# vcb/settings.py and scripts/launch.ps1.
+RETIRED_TTS_ENGINES = {"indextts": "IndexTTS", "xtts": "XTTS v2", "csm": "Sesame CSM"}
 _GPU_ONLY_TTS = {"chatterbox-turbo", "indextts", "xtts", "orpheus", "csm"}
 # IndexTTS runs in its own CUDA-pinned environment, Orpheus inside a CUDA
 # llama-cpp build: neither has an AMD (ROCm) path.
@@ -97,6 +105,11 @@ def _resolve_stt(cfg: AppConfig, backend: str) -> None:
 def adapt_to_hardware(cfg: AppConfig, tts_engine: str, backend: str) -> str:
     """Pick settings that work on this machine's GPU (or none). Returns the
     TTS engine to actually use."""
+    if tts_engine in RETIRED_TTS_ENGINES:
+        log.warning("The %s voice is no longer part of VCB; using Chatterbox instead (it "
+                    "clones your voice sample too). Pick a voice in VCB Settings to stop "
+                    "this message.", RETIRED_TTS_ENGINES[tts_engine])
+        tts_engine = "chatterbox-turbo"
     if tts_engine not in TTS_ENGINES:
         raise ValueError(
             f"unknown TTS engine {tts_engine!r} (use one of: {', '.join(TTS_ENGINES)})"

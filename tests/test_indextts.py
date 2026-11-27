@@ -13,8 +13,7 @@ import soundfile as sf
 
 from vcb import gpu
 from vcb.chunker import SentenceChunker
-from vcb.config import AppConfig, ChunkerConfig, TTSConfig
-from vcb.hardware import adapt_to_hardware
+from vcb.config import ChunkerConfig, TTSConfig
 from vcb.sanitize import sanitize_for_speech
 from vcb.tts.indextts_tts import (
     MOODS,
@@ -213,14 +212,6 @@ def test_missing_runtime_explains_how_to_install(tmp_path):
     cfg.indextts_dir = str(tmp_path / "nothing-here")
     with pytest.raises(RuntimeError, match="VCB.bat"):
         asyncio.run(IndexTTSEngine(cfg).load())
-
-
-def test_no_gpu_falls_back_to_kokoro():
-    cfg = AppConfig()
-    assert adapt_to_hardware(cfg, "indextts", backend="cuda") == "indextts"
-    assert adapt_to_hardware(cfg, "indextts", backend="cpu") == "kokoro"
-    # An AMD GPU can't run IndexTTS' CUDA runtime, but can still clone the voice.
-    assert adapt_to_hardware(AppConfig(), "indextts", backend="rocm") == "chatterbox-turbo"
 
 
 def test_chunker_overrides_keep_whole_sentences():

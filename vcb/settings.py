@@ -23,6 +23,7 @@ from .gpu import (
     DEFAULT_RESERVE_GB, OLLAMA_CHOICES, ModelChoice, detect_amd_gpus, detect_gpus,
     estimate_vram_gb, llm_budget_gb, recommend, rocm_supported, speech_vram_gb, vocal_vram_gb,
 )
+from .hardware import RETIRED_TTS_ENGINES
 
 DEFAULT_LABEL = "System default"
 AUTO_TZ = "Automatic (this PC)"
@@ -53,37 +54,41 @@ KOKORO_VOICES = (
 )
 # value -> (radio label, plain-language explanation shown under the choices).
 # Only Kokoro ships with the base install; the launcher installs the others on
-# the first start after they're picked here (see ENGINE_MODULES).
+# the first start after they're picked here (see ENGINE_MODULES). Entries marked
+# "retired" are no longer offered (see RETIRED_TTS_ENGINES in vcb/hardware.py).
 VOICE_ENGINES = {
     "chatterbox-turbo": (
         "Clone a voice - fast (Chatterbox)",
         "Speaks in the voice from your sample. Starts talking within about a second "
         "and sounds natural, but the tone stays much the same whatever the mood. "
         "Uses ~4.7 GB of GPU memory."),
-    "indextts": (
-        "Clone a voice - emotional (IndexTTS-2.5)",
-        "Speaks in the voice from your sample AND acts out feelings - excited, "
-        "playful, sad, angry, surprised - picked by the assistant for each sentence. "
-        "The most human-sounding option, but it takes a few seconds before it starts "
-        "talking. NVIDIA GPU only, ~6.4 GB of GPU memory per copy (Auto adds a second "
-        "copy on another GPU with room, so long replies flow without pauses)."),
+    # Retired:
+    # "indextts": (
+    #     "Clone a voice - emotional (IndexTTS-2.5)",
+    #     "Speaks in the voice from your sample AND acts out feelings - excited, "
+    #     "playful, sad, angry, surprised - picked by the assistant for each sentence. "
+    #     "The most human-sounding option, but it takes a few seconds before it starts "
+    #     "talking. NVIDIA GPU only, ~6.4 GB of GPU memory per copy (Auto adds a second "
+    #     "copy on another GPU with room, so long replies flow without pauses)."),
     "kokoro": (
         "Preset voice (Kokoro)",
         "Built-in voices, very light (even runs without a GPU). Can't copy a voice "
         "and shows little emotion. Always installed."),
-    "xtts": (
-        "Clone a voice - classic (XTTS v2)",
-        "Coqui's XTTS: clones your sample in 17 languages. Older and slower to start "
-        "talking than Chatterbox, with less natural pacing. ~4 GB of GPU memory."),
+    # Retired:
+    # "xtts": (
+    #     "Clone a voice - classic (XTTS v2)",
+    #     "Coqui's XTTS: clones your sample in 17 languages. Older and slower to start "
+    #     "talking than Chatterbox, with less natural pacing. ~4 GB of GPU memory."),
     "orpheus": (
         "Preset voice - expressive (Orpheus)",
         "Eight built-in voices with natural laughs, sighs and chuckles, spoken by a "
         "3B llama.cpp model. Can't copy a voice. NVIDIA GPU only, ~5 GB of GPU memory."),
-    "csm": (
-        "Conversational (Sesame CSM-1B)",
-        "Sesame's conversational model: lively, natural delivery that reacts to the "
-        "flow of the chat. Picks a voice itself unless you point VCB_CSM_REF_AUDIO at "
-        "a sample with its exact transcript (see vcb\\config.py). ~5 GB of GPU memory."),
+    # Retired:
+    # "csm": (
+    #     "Conversational (Sesame CSM-1B)",
+    #     "Sesame's conversational model: lively, natural delivery that reacts to the "
+    #     "flow of the chat. Picks a voice itself unless you point VCB_CSM_REF_AUDIO at "
+    #     "a sample with its exact transcript (see vcb\\config.py). ~5 GB of GPU memory."),
 }
 # engine -> Python module the launcher's pack provides (installed = importable).
 ENGINE_MODULES = {"chatterbox-turbo": "chatterbox", "xtts": "TTS", "orpheus": "orpheus_cpp",
@@ -285,6 +290,10 @@ class SettingsWindow:
         # -- voice ------------------------------------------------------------
         self._heading("Voice")
         engine = get("VCB_TTS_ENGINE", "chatterbox-turbo")
+        # A retired voice isn't offered any more: preselect what VCB uses instead.
+        self.retired_engine = RETIRED_TTS_ENGINES.get(engine)
+        if self.retired_engine:
+            engine = "chatterbox-turbo"
         self.engine = tk.StringVar(value=engine)
         modes = ttk.Frame(frame)
         modes.grid(row=self.row, column=0, columnspan=3, sticky="w")
@@ -486,6 +495,11 @@ class SettingsWindow:
         else:
             self.indextts_box.grid_remove()
         text, problem = self._engine_description(engine)
+        if self.retired_engine:
+            text = (f"Your previous voice, {self.retired_engine}, is no longer part of VCB. "
+                    "Until you save a voice here, VCB uses the fast Chatterbox clone "
+                    "instead.\n" + text)
+            problem = True
         self.engine_info.config(text=text, foreground="#b06000" if problem else "gray")
         if hasattr(self, "search"):
             self.search.refresh()            # cloud brain + search: privacy note
@@ -690,9 +704,10 @@ class SettingsWindow:
             "VCB_VOICE_WAV": self._store_voice(voice) or None,
             "VCB_KOKORO_VOICE": self.kokoro_voice.get(),
             "VCB_ORPHEUS_VOICE": self.orpheus_voice.get(),
-            "VCB_INDEXTTS_GPUS": (
-                "auto" if self.indextts_gpu.get() == INDEXTTS_AUTO_GPU
-                else self.indextts_gpu.get().split(":")[0].removeprefix("GPU ")),
+            # Retired (IndexTTS): left out, so a value already in .env stays as it is.
+            # "VCB_INDEXTTS_GPUS": (
+            #     "auto" if self.indextts_gpu.get() == INDEXTTS_AUTO_GPU
+            #     else self.indextts_gpu.get().split(":")[0].removeprefix("GPU ")),
             "VCB_ACTIVE_PROMPT": self.persona.get(),
             "VCB_USER_NAME": self.user_name.get().strip() or None,
             "VCB_TIMEZONE": tz,

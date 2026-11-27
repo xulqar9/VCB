@@ -1,0 +1,32 @@
+# TTS benchmark sentences: the same 15 lines go to every engine.
+#
+# Format:  id | category | intent | text
+#   category  neutral | emotion | human
+#   intent    what the line is meant to sound like (used for the review page)
+#
+# Human sounds are written as canonical <tags>: <laugh> <sigh> <hesitation> <breath>.
+# Each engine adapter rewrites them into its own syntax (Breeze "(laugh)",
+# Chatterbox "[laugh]", ...) or drops a tag the engine cannot perform, so the
+# line still reads naturally without it. Emotion is carried by the wording
+# alone: no engine gets a style prompt.
+
+# --- 5 neutral conversational ---------------------------------------------
+n01 | neutral | conversational | Hi there, I just finished the report, so I'll send it over to you in a few minutes.
+n02 | neutral | conversational | The train leaves at half past six, so we should probably head to the station soon.
+n03 | neutral | conversational | I usually take the bus to work, but today I decided to walk and enjoy the weather.
+n04 | neutral | conversational | Could you remind me where you put the spare keys? I already looked in the kitchen.
+n05 | neutral | conversational | We can talk about the schedule tomorrow morning, if that works better for you.
+
+# --- 5 emotional: excited, sad, annoyed, whispering, warm -----------------
+e01 | emotion | excited | Oh wow, we actually did it! I can't believe we won, this is the best day ever!
+e02 | emotion | sad | I still can't believe he's gone. The house feels so empty without him.
+e03 | emotion | annoyed | I've asked you three times already. Please stop leaving your dishes in the sink.
+e04 | emotion | whispering | Shh, keep your voice down. The baby just fell asleep, and I don't want to wake her.
+e05 | emotion | warm | I'm so glad you came. Sit down, make yourself at home, and let me get you something warm to drink.
+
+# --- 5 human sounds: laugh, sigh, hesitation, breath, and a mix -----------
+h01 | human | laugh | Oh no, you didn't actually say that to her, did you? <laugh> That is hilarious.
+h02 | human | sigh | <sigh> I guess we'll just have to start over and try again tomorrow.
+h03 | human | hesitation | Well, <hesitation> I'm not really sure, <hesitation> maybe we should ask her first?
+h04 | human | breath | <breath> Okay, I'm ready. <breath> Let's do this one more time.
+h05 | human | mixed | <sigh> What a long day. <laugh> But honestly, the coffee made it worth it.

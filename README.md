@@ -109,7 +109,7 @@ GPU free for a game or other work, set `VCB_CUDA_DEVICES` in `.env`.)
 | **32 GB+** | `gemma3:27b` | `gemma3:27b` |
 
 <sub>Measured: speech recognition ~2.2 GB, cloned voice (Chatterbox) ~4.7 GB,
-emotional cloned voice (IndexTTS) ~6.4 GB, preset voice (Kokoro) ~0.7 GB; 2 GB
+preset voice (Kokoro) ~0.7 GB; 2 GB
 kept free. VCB runs Ollama models with an
 8k-token context, which needs far less memory than Ollama's default.</sub>
 
@@ -117,32 +117,24 @@ kept free. VCB runs Ollama models with an
 
 Only the light Kokoro preset voice is installed up front. Pick any other voice
 in the settings and the next `VCB.bat` start downloads just that engine
-(one-time, 2–8 GB); the settings window tells you what's installed.
+(one-time, ~3 GB); the settings window tells you what's installed.
 
 - **Clone a voice — fast (Chatterbox)** — pick a 5–15 s `.wav` of clean speech
   in the settings. No file? It uses a pleasant built-in voice. Besides laughs
   and sighs it can whisper and sound happy, angry, sarcastic, … on cue. Needs an
   NVIDIA GPU or a [supported AMD Radeon](#-requirements).
-- **Clone a voice — emotional (IndexTTS-2.5)** — your voice sample, plus real
-  emotion: the assistant chooses a mood from the conversation when its delivery
-  genuinely changes; the mood carries forward, so most replies need no new tag.
-  The most human-sounding option, but it takes a few seconds before it starts
-  talking. NVIDIA GPU only, ~6.4 GB per copy: with **Voice GPU = Auto** a second
-  copy runs on another GPU that has room, rendering the next part of a reply
-  while the current one plays (or pin it to one GPU in the settings). It runs in its own Python (it pins different library
-  versions), which `VCB.bat` downloads into `.runtime\indextts` the first time
-  you start VCB with it selected (one-time, ~8 GB).
 - **Preset voices (Kokoro)** — light and fast, works even without a GPU.
-- **Clone a voice — classic (XTTS v2)** — Coqui's multilingual cloner; older
-  and slower to start than Chatterbox.
 - **Preset voice — expressive (Orpheus)** — eight built-in voices with natural
   laughs and sighs from a 3B llama.cpp model. `VCB_ORPHEUS_MODEL` can point at
   other weights (`owner/repo/file.gguf` on HuggingFace or a local `.gguf`), but
   larger quants are slower without sounding clearly better. NVIDIA GPU only.
-- **Conversational (Sesame CSM-1B)** — lively, conversational delivery; seeds
-  its voice from `VCB_CSM_REF_AUDIO` + its exact transcript, or invents one.
 
 `VCB.bat --extras` installs all of them at once.
+
+IndexTTS-2.5, XTTS v2 and Sesame CSM are retired: the settings no longer offer
+them and `VCB.bat` no longer installs them. If one of them was your voice, VCB
+speaks with Chatterbox instead until you pick another one. Their code stays in
+`vcb/tts/` (see `RETIRED_TTS_ENGINES` in [`vcb/hardware.py`](vcb/hardware.py)).
 
 > [!IMPORTANT]
 > Only clone voices you have the right to use — your own, or with the speaker's consent.
@@ -249,7 +241,7 @@ flowchart LR
     stt --> mem[(Memory)]
     mem --> llm{{LLM<br/>Ollama · Gemini · OpenAI}}
     llm -->|streamed tokens| chunk[Sentence<br/>chunker]
-    chunk --> tts[Chatterbox / IndexTTS / Kokoro<br/>TTS]
+    chunk --> tts[Chatterbox / Kokoro / Orpheus<br/>TTS]
     tts --> spk([🔊 Speaker])
     tts -.-> chat[[💬 Live transcript]]
     vad -.->|you talk = barge-in| llm
@@ -379,8 +371,8 @@ with a current Adrenalin driver, `VCB.bat` installs AMD's ROCm build of PyTorch
 and the voice (including cloning) runs on the GPU. Speech recognition
 (Parakeet) runs on the CPU there — about 0.2 s per sentence, no slower in
 practice than NVIDIA users experience; a Whisper language uses Whisper as a
-plain PyTorch model on the GPU. IndexTTS and Orpheus are NVIDIA-only; if you
-pick them VCB clones your voice with Chatterbox instead.
+plain PyTorch model on the GPU. Orpheus is NVIDIA-only; if you pick it VCB
+speaks with Chatterbox instead.
 
 Other Radeons (RX 6000 series, RX 7800 XT, RX 7900 XT, …) run in CPU mode with
 the preset voice. To try AMD's build on an unlisted card anyway (unsupported;
@@ -449,9 +441,9 @@ unreal/VcbAvatar/            optional Unreal Engine plugin
 ```
 
 Requirement files: [`requirements.txt`](requirements.txt) (core: Kokoro,
-Whisper, memory), `requirements-chatterbox.txt` / `-xtts.txt` /
-`-orpheus.txt` / `-csm.txt` (voice engine packs the launcher installs on
-demand), [`requirements-lock.txt`](requirements-lock.txt) (tested versions),
+Whisper, memory), `requirements-chatterbox.txt` / `-orpheus.txt` (voice engine
+packs the launcher installs on demand; `-xtts.txt` / `-csm.txt` belong to
+retired voices and aren't installed), [`requirements-lock.txt`](requirements-lock.txt) (tested versions),
 [`requirements-overrides.txt`](requirements-overrides.txt) (resolves
 over-strict pins in chatterbox-tts / orpheus-cpp), `requirements-search.txt`
 (online search, installed only when it's turned on).
@@ -487,9 +479,7 @@ This repository contains only VCB's own code. Libraries and models are not
 included: the launcher downloads them from their official sources (PyPI,
 Hugging Face) and each keeps its own license — e.g. Chatterbox, Kokoro,
 Parakeet (CC-BY-4.0) and Whisper are permissively licensed, Kokoro's English
-phonemizer is GPL-3.0, IndexTTS
-uses the bilibili IndexTTS model license, the optional
-XTTS v2 engine is Coqui's non-commercial CPML, and LLMs follow their provider's
+phonemizer is GPL-3.0, and LLMs follow their provider's
 terms.
 
 ## 🙏 Acknowledgements
@@ -499,7 +489,6 @@ VCB stands on the shoulders of great open-source work:
 [Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) via [onnx-asr](https://github.com/istupakov/onnx-asr) ·
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) ·
 [Chatterbox](https://github.com/resemble-ai/chatterbox) ·
-[IndexTTS](https://github.com/index-tts/index-tts) ·
 [Kokoro](https://github.com/hexgrad/kokoro) ·
 [Ollama](https://ollama.com) ·
 [FastEmbed](https://github.com/qdrant/fastembed) ·

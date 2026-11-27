@@ -45,25 +45,24 @@ from vcb.llm import OpenAICompatLLM  # noqa: E402
 from vcb.orchestrator import Orchestrator, speaker_name  # noqa: E402
 from vcb.runtime import ManagedProcesses, setup_logging  # noqa: E402
 from vcb.stt import STT_ENGINES  # noqa: E402
-from vcb.tts import (  # noqa: E402
-    ChatterboxTurboTTS, IndexTTSEngine, KokoroTTS, OrpheusTTS, SesameCSMTTS, XTTSv2TTS,
-)
+from vcb.tts import ChatterboxTurboTTS, KokoroTTS, OrpheusTTS  # noqa: E402
+
+# Retired voices (see RETIRED_TTS_ENGINES in vcb/hardware.py):
+# from vcb.tts import IndexTTSEngine, SesameCSMTTS, XTTSv2TTS
 
 # TTS engine: "chatterbox-turbo" (default; clones your voice .wav, voices
-# <laugh>/<sigh> tags), "kokoro" (preset voices, light, runs on CPU too),
-# "indextts" (clones your .wav and acts emotions; the launcher installs its
-# isolated runtime on first use), and optional extras "xtts", "orpheus", "csm"
-# (see requirements-extras.txt).
+# <laugh>/<sigh> tags), "kokoro" (preset voices, light, runs on CPU too) and
+# "orpheus" (expressive preset voices; the launcher installs it on first use).
 # Set VCB_TTS_ENGINE in .env (or the settings window).
 TTS_ENGINE = os.environ.get("VCB_TTS_ENGINE", "chatterbox-turbo")
 
 _TTS_ENGINES = {
     "kokoro": KokoroTTS,
-    "xtts": XTTSv2TTS,
+    # "xtts": XTTSv2TTS,              # retired
     "chatterbox-turbo": ChatterboxTurboTTS,
-    "indextts": IndexTTSEngine,
+    # "indextts": IndexTTSEngine,     # retired
     "orpheus": OrpheusTTS,
-    "csm": SesameCSMTTS,
+    # "csm": SesameCSMTTS,            # retired
 }
 
 

@@ -1,0 +1,60 @@
+# Settings for the TTS benchmark. Start with: python tools\tts_benchmark.py --help
+# Relative paths are relative to the VCB repo root. Commented-out lines show a
+# default or an example. Nothing in this file, and nothing the benchmark
+# produces, is sent anywhere.
+
+[run]
+runs_per_sentence = 3     # counted runs per sentence and engine
+warmup_runs = 1           # uncounted runs before them, once per engine session
+timeout_s = 30            # hard limit per counted synthesis; a slower run is recorded as TimeoutError
+seed = 1234               # the per-run seeds are the same for every engine
+# load_timeout_s = 1800   # loading a model can take minutes
+# warmup_timeout_s = 300  # the first call pays CUDA / JIT start-up costs
+# max_restarts = 3        # engine restarts after a timeout or crash before it is abandoned
+# output_dir = "output"   # clips are written to output/<engine>/<sentence_id>_<run>.wav
+# sentences = "tools/tts_bench/sentences.txt"
+
+[voice]
+# The one short clip the voice-cloning run uses, with its exact transcript
+# (cloning engines need both). Engines without a cloning mode always run their
+# default voice. Keep the clip under ~30 s.
+reference_clip = "desired_voice.wav"
+reference_text = "Hello, this is a universal test sentence. Can the advanced xylophonic system clearly articulate this and express a hint of excitement? The quick brown fox certainly hopes so."
+
+[gpu]
+# The GPU the engine under test runs on: an nvidia-smi index (0, 1) or a unique
+# part of the GPU's name. Every engine uses it unless its own [engines.<name>]
+# table sets `gpu`. VCB's LLM stays on the 5060 Ti through VCB_LLM_CUDA_DEVICES=1
+# in .env, which this tool never touches; each benchmark engine is pinned to its
+# GPU with CUDA_VISIBLE_DEVICES.
+default = "3090 Ti"
+
+[python]
+# Interpreter for engines that have no `python` of their own. Default: VCB's venv.
+# default = ".runtime/venv/Scripts/python.exe"
+
+# Per-engine settings. `python` is the virtualenv that has the engine's packages
+# (`python tools\tts_benchmark.py list` shows the exact ones), `gpu` overrides
+# [gpu].default, and [engines.<name>.options] are the fields of the adapter's
+# Options class in vcb/tts/. The Chatterbox baseline needs nothing here.
+
+# Breeze TTS 2 and Qwen3-TTS pin the same torch / transformers versions, so they can share one venv.
+# [engines.breeze]
+# python = ".runtime/bench/qwen-breeze/Scripts/python.exe"
+# [engines.breeze.options]
+# repo_dir = ".runtime/bench/src/breeze-tts"        # git clone of breezeblue-ai/breeze-tts
+
+# [engines.qwen3-tts]
+# python = ".runtime/bench/qwen-breeze/Scripts/python.exe"
+# [engines.qwen3-tts.options]
+# speaker = "Ryan"                                   # CustomVoice speaker for the default-voice run
+
+# Voxtral and Step-Audio-EditX need Linux (vLLM). Run this tool from WSL2 for
+# them (the repo is /mnt/d/VCB there) with Linux interpreters, e.g. in a
+# separate config passed with --config; both runs merge into the same output/.
+# [engines.voxtral]
+# python = "/home/<you>/bench/voxtral/bin/python"
+# [engines.step-audio-editx]
+# python = "/home/<you>/bench/step-audio/bin/python"
+# [engines.step-audio-editx.options]
+# repo_dir = "/home/<you>/bench/Step-Audio-EditX"

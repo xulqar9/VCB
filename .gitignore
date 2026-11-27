@@ -13,6 +13,8 @@ diag.txt
 models
 logs
 benchmark_results/
+# TTS benchmark clips, raw data and the blind-review page (tools/tts_benchmark.py)
+/output/
 .vscode
 # voice samples dropped in the repo root
 /*.wav
